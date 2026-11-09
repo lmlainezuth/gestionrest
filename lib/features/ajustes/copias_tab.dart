@@ -18,8 +18,11 @@ class _CopiasTabState extends State<CopiasTab> {
   static const _tablas = [
     'empresa', 'tbai_config', 'perfiles', 'salones', 'mesas', 'areas_preparacion', 'grupos_productos',
     'productos', 'modificadores', 'producto_modificadores', 'clientes', 'cajas', 'turnos_caja',
-    'conceptos_gasto', 'movimientos_caja', 'pedidos', 'pedido_detalle', 'pagos', 'facturas',
+    'conceptos_gasto', 'movimientos_caja', 'pedidos', 'pedido_detalle', 'pagos', 'facturas', 'tbai_anulaciones',
     'proveedores', 'gastos', 'cajas_diarias',
+    // Añadidas en 0016-0020
+    'articulos_stock', 'escandallos', 'movimientos_stock', 'pedidos_proveedor', 'pedido_proveedor_lineas',
+    'cuadrante', 'reservas', 'fichajes', 'registro_anulaciones',
   ];
   bool _trabajando = false;
   String _estado = '';
@@ -29,8 +32,23 @@ class _CopiasTabState extends State<CopiasTab> {
   static const _ordenRestaurar = [
     'tbai_config', 'salones', 'mesas', 'areas_preparacion', 'grupos_productos', 'productos',
     'modificadores', 'producto_modificadores', 'clientes', 'cajas', 'conceptos_gasto', 'turnos_caja',
-    'movimientos_caja', 'pedidos', 'pedido_detalle', 'pagos', 'facturas', 'proveedores', 'gastos', 'cajas_diarias',
+    'movimientos_caja', 'pedidos', 'pedido_detalle', 'pagos', 'facturas', 'tbai_anulaciones', 'proveedores', 'gastos',
+    'cajas_diarias', 'articulos_stock', 'escandallos', 'movimientos_stock', 'pedidos_proveedor', 'pedido_proveedor_lineas',
+    'cuadrante', 'reservas',
+    // fichajes y registro_anulaciones van en la copia pero NO se restauran: la base de datos
+    // no deja reescribirlos (registro legal). Siguen estando en el servidor y en la copia de Drive.
   ];
+
+  /// Tablas que no se pueden modificar: solo se añade lo que falte, lo que ya existe no se toca.
+  /// En movimientos_stock además evita contar dos veces (cada movimiento nuevo suma al stock).
+  static const _soloAnadir = {'facturas', 'tbai_anulaciones', 'turnos_caja', 'movimientos_stock'};
+
+  /// Columnas que no se envían al restaurar.
+  static const _quitar = {
+    'pedidos': ['numero'], // lo genera la base de datos
+    'pedidos_proveedor': ['numero'],
+    'articulos_stock': ['stock'], // el stock sale de los movimientos, no se escribe
+  };
   static const _claves = {
     'producto_modificadores': 'producto_id,modificador_id',
     'tbai_config': 'empresa_id',
@@ -62,7 +80,9 @@ class _CopiasTabState extends State<CopiasTab> {
             const Text(
               'Se recuperan los datos de la copia: lo que falte se vuelve a crear y lo que exista se deja '
               'como estaba en la copia. No se borra nada de lo que hayas añadido después. '
-              'Los usuarios y sus PIN no se restauran.',
+              'Las facturas, turnos cerrados y movimientos de stock que ya existen no se tocan. '
+              'Los usuarios y sus PIN no se restauran; los fichajes y el registro de anulaciones tampoco '
+              '(la ley no deja reescribirlos).',
               style: TextStyle(color: C.gris),
             ),
             const SizedBox(height: 12),
@@ -89,11 +109,11 @@ class _CopiasTabState extends State<CopiasTab> {
           for (final f in filas)
             {...f}
               ..remove('empresa_id')
-              ..remove(t == 'pedidos' ? 'numero' : '_'),
+              ..removeWhere((k, _) => _quitar[t]?.contains(k) ?? false),
         ];
         for (var i = 0; i < limpias.length; i += 500) {
           final lote = limpias.sublist(i, i + 500 > limpias.length ? limpias.length : i + 500);
-          await supabase.from(t).upsert(lote, onConflict: _claves[t] ?? 'id');
+          await supabase.from(t).upsert(lote, onConflict: _claves[t] ?? 'id', ignoreDuplicates: _soloAnadir.contains(t));
         }
         resumen.add('$t: ${filas.length}');
       }
@@ -123,7 +143,7 @@ class _CopiasTabState extends State<CopiasTab> {
     try {
       final datos = <String, dynamic>{
         'app': 'GestiónRest',
-        'version_copia': 1,
+        'version_copia': 2,
         'fecha': DateTime.now().toIso8601String(),
       };
       final cuentas = <String>[];

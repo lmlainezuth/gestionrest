@@ -7,6 +7,7 @@ import '../../main.dart';
 import '../barra/barra_page.dart';
 import '../barra/venta_offline.dart';
 import '../comanda/comanda_page.dart';
+import '../reservas/reservas_page.dart' show reservasDeHoyPorMesa, horaReserva;
 import '../ticketbai/modelos.dart' show euros;
 
 /// Plano de mesas por salón (zona), con el estilo de la propuesta de diseño.
@@ -22,6 +23,7 @@ class _MesasViewState extends State<MesasView> {
   String? _salonId;
   Map<String, Map<String, dynamic>> _abiertos = {};
   List<Map<String, dynamic>> _llevar = [];
+  Map<String, Map<String, dynamic>> _reservas = {}; // mesa → su próxima reserva de hoy
   bool _sinConexion = false;
 
   @override
@@ -85,6 +87,7 @@ class _MesasViewState extends State<MesasView> {
         if (p['mesa_id'] != null) p['mesa_id'] as String: p,
     };
     _llevar = [for (final p in pedidos) if (p['tipo'] == 'llevar') p];
+    _reservas = await reservasDeHoyPorMesa();
     VentaOffline.refrescarCopia().catchError((_) {}); // por si se va internet
     return List<Map<String, dynamic>>.from(filas);
   }
@@ -265,6 +268,7 @@ class _MesasViewState extends State<MesasView> {
                     _MesaTile(
                       mesa: m,
                       pedido: _abiertos[m['id']],
+                      reserva: _reservas[m['id']],
                       onTap: () => _abrir(m, salon['nombre'] as String),
                     ),
                 ],
@@ -347,9 +351,10 @@ class _Leyenda extends StatelessWidget {
 }
 
 class _MesaTile extends StatelessWidget {
-  const _MesaTile({required this.mesa, required this.pedido, required this.onTap});
+  const _MesaTile({required this.mesa, required this.pedido, this.reserva, required this.onTap});
   final Map<String, dynamic> mesa;
   final Map<String, dynamic>? pedido;
+  final Map<String, dynamic>? reserva;
   final VoidCallback onTap;
 
   @override
@@ -362,7 +367,7 @@ class _MesaTile extends StatelessWidget {
     final (fondo, borde, texto, etiqueta) = switch (disp) {
       'ocupada' => (C.ocupada, C.ocupada, C.tinta, 'Ocupada'),
       'precuenta' => (C.tinta, C.tinta, Colors.white, 'Pide la cuenta'),
-      'reservada' => (C.blanco, C.reserva, C.tinta, 'Reservada'),
+      'reservada' => (C.blanco, C.reserva, C.tinta, reserva == null ? 'Reservada' : 'R ${horaReserva(reserva!)}'),
       _ => (C.blanco, C.bordeFuerte, C.tinta, 'Libre'),
     };
     final capacidad = pedido?['num_personas'] ?? mesa['capacidad'];
@@ -394,6 +399,11 @@ class _MesaTile extends StatelessWidget {
                     const Spacer(),
                     if (minutos != null)
                       Text('$minutos min', style: TextStyle(fontSize: 12, color: texto.withValues(alpha: 0.8))),
+                    if (pedido != null && reserva != null)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 4),
+                        child: Icon(Icons.event, size: 16, color: texto.withValues(alpha: 0.8)),
+                      ),
                   ],
                 ),
                 const Spacer(),
@@ -402,8 +412,17 @@ class _MesaTile extends StatelessWidget {
                   children: [
                     Icon(Icons.person_outline, size: 16, color: texto.withValues(alpha: 0.7)),
                     const SizedBox(width: 4),
-                    Text(capacidad == null ? '—' : '$capacidad pax',
-                        style: TextStyle(fontSize: 13, color: texto.withValues(alpha: 0.8))),
+                    Flexible(
+                      child: Text(
+                          pedido == null && reserva != null
+                              ? '${reserva!['nombre']} · ${reserva!['personas']}'
+                              : capacidad == null
+                                  ? '—'
+                                  : '$capacidad pax',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 13, color: texto.withValues(alpha: 0.8))),
+                    ),
                     const Spacer(),
                     if (pedido == null)
                       Text(etiqueta, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: texto)),

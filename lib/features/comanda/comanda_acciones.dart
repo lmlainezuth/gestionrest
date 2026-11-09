@@ -257,8 +257,9 @@ Future<bool> dividirCuenta(BuildContext context, Map<String, dynamic> pedido) as
       final l = lineas.firstWhere((x) => x['id'] == p.id);
       await supabase.from('pedido_detalle').update({'cantidad': l['cantidad']}).eq('id', p.id);
     }
+    // El pedido temporal vuelve a la cuenta original ("unido"): no cuenta como anulación
+    await supabase.from('pedidos').update({'estado': 'unido'}).eq('id', nuevo['id']);
     await supabase.from('pedido_detalle').delete().eq('pedido_id', nuevo['id']);
-    await supabase.from('pedidos').update({'estado': 'anulado'}).eq('id', nuevo['id']);
     return false;
   }
   if (context.mounted) {

@@ -9,6 +9,7 @@ import '../../core/tema.dart';
 import '../../main.dart';
 import '../ticketbai/modelos.dart' show euros;
 import 'alergenos.dart';
+import 'carta_qr.dart';
 import 'colores.dart';
 import 'grupo_dialog.dart';
 import 'modificadores_dialog.dart';
@@ -188,6 +189,12 @@ class _CartaPageState extends State<CartaPage> {
                               style: tema.textTheme.titleLarge,
                             ),
                           ),
+                          OutlinedButton.icon(
+                            onPressed: () => mostrarQrCarta(context),
+                            icon: const Icon(Icons.qr_code_2),
+                            label: const Text('Carta QR'),
+                          ),
+                          const SizedBox(width: 8),
                           FilledButton.icon(
                             onPressed: () => _abrirProducto(),
                             icon: const Icon(Icons.add),

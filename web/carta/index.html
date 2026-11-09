@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Carta</title>
+<link rel="preconnect" href="https://zouujjameuyyedqiotxt.supabase.co">
+<style>
+  :root { --verde:#0F5C4D; --tinta:#1C1B19; --gris:#5E5A52; --crema:#F6F4EF; --borde:#E6E1D6; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; background: var(--crema); color: var(--tinta); }
+  header { background: var(--verde); color: #fff; padding: 22px 16px 16px; }
+  header h1 { margin: 0; font-size: 26px; }
+  header p { margin: 4px 0 0; opacity: .8; font-size: 14px; }
+  nav { position: sticky; top: 0; z-index: 2; background: var(--crema); display: flex; gap: 8px; overflow-x: auto;
+        padding: 10px 16px; border-bottom: 1px solid var(--borde); scrollbar-width: none; }
+  nav a { flex: none; text-decoration: none; color: var(--tinta); background: #fff; border: 1px solid var(--borde);
+          padding: 8px 14px; border-radius: 999px; font-weight: 600; font-size: 14px; }
+  main { max-width: 720px; margin: auto; padding: 8px 16px 40px; }
+  h2 { margin: 26px 0 10px; font-size: 20px; scroll-margin-top: 64px; }
+  .p { display: flex; gap: 12px; background: #fff; border: 1px solid var(--borde); border-radius: 14px; padding: 12px; margin-bottom: 10px; }
+  .p img { width: 76px; height: 76px; object-fit: cover; border-radius: 10px; flex: none; }
+  .p .t { flex: 1; min-width: 0; }
+  .p .n { font-weight: 700; font-size: 16px; }
+  .p .a { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
+  .p .a span { font-size: 11px; background: #FDF0DC; color: #8a4b08; padding: 2px 7px; border-radius: 6px; }
+  .p .pr { font-weight: 700; font-size: 16px; white-space: nowrap; }
+  .aviso { color: var(--gris); font-size: 12px; margin-top: 30px; line-height: 1.5; }
+  .estado { padding: 60px 16px; text-align: center; color: var(--gris); }
+</style>
+</head>
+<body>
+<header><h1 id="nombre">Carta</h1><p>Precios con IVA incluido</p></header>
+<nav id="grupos"></nav>
+<main id="carta"><div class="estado">Cargando la carta…</div></main>
+<script>
+// Carta pública de GestiónRest: /carta/?e=<id de la empresa>. Solo lectura (función carta_publica).
+const URL_SB = "https://zouujjameuyyedqiotxt.supabase.co";
+const CLAVE = "sb_publishable_oF8647VghLNyzdG71lwJ0Q_vdkwZZ5a";
+const ALERGENOS = { gluten: "Gluten", crustaceos: "Crustáceos", huevo: "Huevo", pescado: "Pescado", cacahuete: "Cacahuete",
+  soja: "Soja", lacteos: "Lácteos", frutos_cascara: "Frutos de cáscara", apio: "Apio", mostaza: "Mostaza", sesamo: "Sésamo",
+  sulfitos: "Sulfitos", altramuces: "Altramuces", moluscos: "Moluscos" };
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const eur = (v) => Number(v).toLocaleString("es-ES", { style: "currency", currency: "EUR" });
+const main = document.getElementById("carta");
+
+async function cargar() {
+  const empresa = new URLSearchParams(location.search).get("e");
+  if (!empresa) { main.innerHTML = '<div class="estado">Falta el código del bar en el enlace.</div>'; return; }
+  try {
+    const r = await fetch(`${URL_SB}/rest/v1/rpc/carta_publica`, {
+      method: "POST",
+      headers: { apikey: CLAVE, "Content-Type": "application/json" },
+      body: JSON.stringify({ p_empresa: empresa }),
+    });
+    const c = await r.json();
+    if (!r.ok || !c) throw new Error();
+    document.title = `Carta · ${c.nombre}`;
+    document.getElementById("nombre").textContent = c.nombre;
+    document.getElementById("grupos").innerHTML =
+      c.grupos.map((g, i) => `<a href="#g${i}">${esc(g.nombre)}</a>`).join("");
+    main.innerHTML = c.grupos.map((g, i) => `
+      <h2 id="g${i}">${esc(g.nombre)}</h2>
+      ${g.productos.map((p) => `
+        <div class="p">
+          ${p.imagen ? `<img src="${esc(p.imagen)}" alt="" loading="lazy">` : ""}
+          <div class="t">
+            <div class="n">${esc(p.nombre)}</div>
+            ${p.alergenos?.length ? `<div class="a">${p.alergenos.map((a) => `<span>${esc(ALERGENOS[a] ?? a)}</span>`).join("")}</div>` : ""}
+          </div>
+          <div class="pr">${eur(p.precio)}</div>
+        </div>`).join("")}`).join("") +
+      `<p class="aviso">Si tienes alguna alergia o intolerancia, pregunta al personal antes de pedir.
+       Información sobre alérgenos según el Reglamento (UE) 1169/2011.</p>`;
+  } catch {
+    main.innerHTML = '<div class="estado">No se ha podido cargar la carta. Prueba de nuevo en un momento.</div>';
+  }
+}
+cargar();
+</script>
+</body>
+</html>

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../../core/aviso_sin_conexion.dart';
@@ -12,12 +13,23 @@ import '../ajustes/ajustes_page.dart';
 import '../barra/barra_page.dart';
 import '../caja/caja_page.dart';
 import '../carta/carta_page.dart';
+import '../control/anulaciones_page.dart';
+import '../control/iva_page.dart';
+import '../control/margenes_page.dart';
+import '../control/panel_hoy_page.dart';
 import '../cocina/cocina_page.dart';
+import '../caja/cierres_page.dart';
 import '../gestion/caja_diaria_page.dart';
 import '../gestion/gastos_page.dart';
 import '../gestion/proveedores_page.dart';
 import '../gestion/resumen_page.dart';
+import '../fichajes/cuadrante_page.dart';
+import '../fichajes/fichajes_page.dart';
 import '../informes/informes_page.dart';
+import '../stock/movimientos_stock_page.dart';
+import '../stock/pedidos_proveedor_page.dart';
+import '../stock/stock_page.dart';
+import '../reservas/reservas_page.dart';
 import '../ticketbai/facturas_page.dart';
 
 class AdminHome extends StatefulWidget {
@@ -30,16 +42,20 @@ class AdminHome extends StatefulWidget {
 
 class _AdminHomeState extends State<AdminHome> {
   // Al abrir, la Barra (venta rápida) si este usuario la tiene
-  late int _seccion = _visibles.indexWhere((s) => s.titulo == 'Barra').clamp(0, _visibles.length);
+  // En el TPV abre en la Barra; en el móvil (web) el dueño abre en "Hoy"
+  late int _seccion = _visibles.indexWhere((s) => s.titulo == (kIsWeb && widget.perfil.puede('panel') ? 'Hoy' : 'Barra'))
+      .clamp(0, _visibles.length);
 
   /// Secciones, en orden de uso. Se ve si el usuario tiene alguno de sus permisos.
   static const _secciones = [
+    (icono: Icons.speed, titulo: 'Hoy', permisos: ['panel']),
     (icono: Icons.local_bar_outlined, titulo: 'Barra', permisos: ['barra']),
     (icono: Icons.grid_view_rounded, titulo: 'Mesas', permisos: ['mesas']),
     (icono: Icons.soup_kitchen_outlined, titulo: 'Cocina', permisos: ['cocina']),
-    (icono: Icons.point_of_sale, titulo: 'Caja', permisos: ['caja', 'caja_diaria']),
-    (icono: Icons.receipt_outlined, titulo: 'Gastos', permisos: ['gastos', 'proveedores']),
-    (icono: Icons.insights_outlined, titulo: 'Números', permisos: ['resumen', 'informes', 'facturas']),
+    (icono: Icons.point_of_sale, titulo: 'Caja', permisos: ['caja', 'caja_diaria', 'cierres']),
+    (icono: Icons.shopping_basket_outlined, titulo: 'Compras', permisos: ['gastos', 'proveedores', 'stock']),
+    (icono: Icons.badge_outlined, titulo: 'Equipo', permisos: ['fichajes']),
+    (icono: Icons.insights_outlined, titulo: 'Números', permisos: ['resumen', 'informes', 'facturas', 'anulaciones']),
     (icono: Icons.restaurant_menu, titulo: 'Carta', permisos: ['carta']),
     (icono: Icons.settings_outlined, titulo: 'Ajustes', permisos: ['ajustes', 'usuarios']),
   ];
@@ -106,21 +122,37 @@ class _AdminHomeState extends State<AdminHome> {
   @override
   Widget build(BuildContext context) {
     final contenido = switch (_visibles[_seccion].titulo) {
+      'Hoy' => const PanelHoyPage(),
       'Barra' => const BarraPage(),
-      'Mesas' => const MesasView(),
+      'Mesas' => Pestanas(pestanas: [
+          (texto: 'Plano', icono: Icons.grid_view_rounded, permiso: 'mesas', pagina: () => const MesasView()),
+          (texto: 'Reservas', icono: Icons.event_outlined, permiso: 'mesas', pagina: () => const ReservasPage()),
+        ]),
       'Cocina' => const CocinaPage(),
       'Caja' => Pestanas(pestanas: [
           (texto: 'Turno de hoy', icono: Icons.point_of_sale, permiso: 'caja', pagina: () => const CajaPage()),
           (texto: 'Caja por días', icono: Icons.calendar_month_outlined, permiso: 'caja_diaria', pagina: () => const CajaDiariaPage()),
+          (texto: 'Cierres y descuadres', icono: Icons.rule, permiso: 'cierres', pagina: () => const CierresPage()),
         ]),
-      'Gastos' => Pestanas(pestanas: [
+      // Todo lo que entra al bar: facturas de proveedores y mercancía
+      'Compras' => Pestanas(pestanas: [
           (texto: 'Facturas de gastos', icono: Icons.receipt_outlined, permiso: 'gastos', pagina: () => const GastosPage()),
           (texto: 'Proveedores', icono: Icons.local_shipping_outlined, permiso: 'proveedores', pagina: () => const ProveedoresPage()),
+          (texto: 'Stock', icono: Icons.inventory_2_outlined, permiso: 'stock', pagina: () => const StockPage()),
+          (texto: 'Pedidos', icono: Icons.local_shipping_outlined, permiso: 'stock', pagina: () => const PedidosProveedorPage()),
+          (texto: 'Movimientos de stock', icono: Icons.swap_vert, permiso: 'stock', pagina: () => const MovimientosStockPage()),
+        ]),
+      'Equipo' => Pestanas(pestanas: [
+          (texto: 'Fichajes', icono: Icons.badge_outlined, permiso: 'fichajes', pagina: () => const FichajesPage()),
+          (texto: 'Cuadrante', icono: Icons.calendar_view_week, permiso: 'fichajes', pagina: () => const CuadrantePage()),
         ]),
       'Números' => Pestanas(pestanas: [
           (texto: 'Resumen', icono: Icons.insights_outlined, permiso: 'resumen', pagina: () => const ResumenPage()),
           (texto: 'Ventas en detalle', icono: Icons.bar_chart_rounded, permiso: 'informes', pagina: () => const InformesPage()),
           (texto: 'Facturas emitidas', icono: Icons.receipt_long, permiso: 'facturas', pagina: () => const FacturasPage()),
+          (texto: 'Anulaciones', icono: Icons.remove_circle_outline, permiso: 'anulaciones', pagina: () => const AnulacionesPage()),
+          (texto: 'Márgenes', icono: Icons.percent, permiso: 'informes', pagina: () => const MargenesPage()),
+          (texto: 'IVA trimestral', icono: Icons.account_balance_outlined, permiso: 'informes', pagina: () => const IvaPage()),
         ]),
       'Carta' => const CartaPage(),
       'Ajustes' => const AjustesPage(),
@@ -134,17 +166,9 @@ class _AdminHomeState extends State<AdminHome> {
       final menu = Container(
             width: 96,
             color: C.panel,
-            padding: const EdgeInsets.symmetric(vertical: 18),
+            padding: const EdgeInsets.symmetric(vertical: 10),
             child: Column(
               children: [
-                Container(
-                  width: 48,
-                  height: 48,
-                  decoration: BoxDecoration(color: C.naranja, borderRadius: BorderRadius.circular(14)),
-                  alignment: Alignment.center,
-                  child: Text('GR', style: titulo(18)),
-                ),
-                const SizedBox(height: 16),
                 Expanded(
                   child: SingleChildScrollView(
                     child: Column(
@@ -280,12 +304,12 @@ class _ItemMenu extends StatelessWidget {
           onTap: onTap,
           child: SizedBox(
             width: 78,
-            height: 58,
+            height: 50,
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(icono, color: color, size: 24),
-                const SizedBox(height: 4),
+                Icon(icono, color: color, size: 22),
+                const SizedBox(height: 3),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 4),
                   child: FittedBox(

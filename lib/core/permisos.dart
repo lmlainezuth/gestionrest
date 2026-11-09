@@ -4,9 +4,9 @@ import '../features/auth/perfil.dart';
 const permisosPermitidos = <Rol, List<String>>{
   Rol.admin: [
     'mesas', 'barra', 'carta', 'caja', 'facturas', 'informes', 'usuarios', 'cocina', 'ajustes', 'cobrar', 'anular',
-    'caja_diaria', 'gastos', 'proveedores', 'resumen',
+    'caja_diaria', 'gastos', 'proveedores', 'resumen', 'stock', 'fichajes', 'cierres', 'panel', 'anulaciones',
   ],
-  Rol.camarero: ['mesas', 'barra', 'cobrar', 'anular', 'caja_diaria', 'gastos', 'proveedores', 'resumen'],
+  Rol.camarero: ['mesas', 'barra', 'cobrar', 'anular', 'caja', 'caja_diaria', 'gastos', 'proveedores', 'resumen', 'stock'],
   Rol.cocinero: ['cocina'],
 };
 
@@ -14,14 +14,14 @@ const permisosPermitidos = <Rol, List<String>>{
 const permisosPorDefecto = <Rol, List<String>>{
   Rol.admin: [
     'mesas', 'barra', 'carta', 'caja', 'facturas', 'informes', 'usuarios', 'cocina', 'ajustes', 'cobrar', 'anular',
-    'caja_diaria', 'gastos', 'proveedores', 'resumen',
+    'caja_diaria', 'gastos', 'proveedores', 'resumen', 'stock', 'fichajes', 'cierres', 'panel', 'anulaciones',
   ],
   Rol.camarero: ['mesas', 'barra', 'cobrar', 'anular'],
   Rol.cocinero: ['cocina'],
 };
 
 /// Secciones de gestión (lo que antes hacía Yitso).
-const permisosGestion = ['caja_diaria', 'gastos', 'proveedores', 'resumen'];
+const permisosGestion = ['caja_diaria', 'gastos', 'proveedores', 'resumen', 'stock'];
 
 const nombresPermiso = <String, String>{
   'mesas': 'Mesas y comandas',
@@ -39,4 +39,9 @@ const nombresPermiso = <String, String>{
   'gastos': 'Gestión · Gastos',
   'proveedores': 'Gestión · Proveedores',
   'resumen': 'Gestión · Resumen del mes',
+  'stock': 'Gestión · Stock e inventario',
+  'fichajes': 'Fichajes del equipo (registro de jornada)',
+  'cierres': 'Ver cierres y descuadres de caja',
+  'panel': 'Panel del dueño (Hoy)',
+  'anulaciones': 'Control de anulaciones',
 };

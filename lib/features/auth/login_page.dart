@@ -4,6 +4,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
 import '../../core/empresa_dispositivo.dart';
+import '../fichajes/fichar_dialog.dart';
+import '../fichajes/fichajes_comun.dart' show FichajeService;
 import 'pin.dart';
 
 /// Entrada: eliges tu nombre y marcas tu PIN. El correo queda como opción.
@@ -27,6 +29,17 @@ class _LoginPageState extends State<LoginPage> {
   void initState() {
     super.initState();
     _cargarEquipo();
+    FichajeService.iniciar();
+  }
+
+  /// Fichar entrada/salida con el PIN marcado, sin entrar en la app.
+  Future<void> _fichar() async {
+    final empresa = await EmpresaDispositivo.leer();
+    if (empresa == null || !mounted) return;
+    final pin = _pin;
+    setState(() => _pin = '');
+    await abrirFichaje(context,
+        empresa: empresa, usuario: _elegido!['id'] as String, nombre: _elegido!['nombre'] as String, pin: pin);
   }
 
   Future<void> _cargarEquipo() async {
@@ -225,6 +238,16 @@ class _LoginPageState extends State<LoginPage> {
                         ),
                       ),
             ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        SizedBox(
+          width: 300,
+          child: OutlinedButton.icon(
+            onPressed: _pin.isEmpty || _entrando ? null : _fichar,
+            icon: const Icon(Icons.badge_outlined),
+            label: const Text('Fichar entrada / salida'),
+            style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 14)),
           ),
         ),
       ],

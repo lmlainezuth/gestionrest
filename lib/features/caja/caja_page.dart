@@ -6,7 +6,9 @@ import '../../core/red.dart';
 import '../../core/impresion.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
+import '../auth/perfil.dart';
 import '../carta/colores.dart' show leerImporte;
+import 'cierre_ciego.dart';
 import '../ticketbai/modelos.dart' show euros;
 import 'caja_service.dart';
 
@@ -169,26 +171,50 @@ class _CajaPageState extends State<CajaPage> {
         }));
   }
 
+  /// Cuadre ciego: se cuenta sin ver lo esperado; el servidor calcula y guarda la diferencia.
   Future<void> _cerrar() async {
-    final aviso = _mesasAbiertas > 0 ? 'Atención: hay $_mesasAbiertas mesas sin cobrar.\n' : '';
-    final contado = await _pedirImporte('Cerrar caja',
-        ayuda: '${aviso}Cuenta el efectivo del cajón. Esperado: ${euros(_efectivoEsperado)}');
-    if (contado == null) return;
-    final esperado = _efectivoEsperado;
-    await _accion(() => supabase.from('turnos_caja').update({
-          'cerrado_en': DateTime.now().toUtc().toIso8601String(),
-          'efectivo_calculado': esperado,
-          'efectivo_real': contado,
-          'diferencia': contado - esperado,
-          'estado': 'cerrado',
-        }).eq('id', _turno!['id']));
-    if (!mounted) return;
+    final datos = await contarCajaCiega(context,
+        aviso: _mesasAbiertas > 0 ? 'Atención: hay $_mesasAbiertas mesas sin cobrar' : null);
+    if (datos == null) return;
+    Map<String, dynamic>? r;
+    await _accion(() async {
+      r = Map<String, dynamic>.from(await supabase.rpc('cerrar_caja_ciego', params: {
+        'p_turno': _turno!['id'],
+        'p_efectivo': datos['efectivo'],
+        'p_conteo': datos['conteo'],
+        'p_tarjeta': datos['tarjeta'],
+        'p_nota': datos['nota'],
+      }) as Map);
+    });
+    if (!mounted || r == null) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Caja cerrada'),
+        content: r!['esperado'] == null
+            ? const Text('Recuento guardado. El encargado verá el resultado.')
+            : Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                _lineaCuadre('Efectivo', r!['esperado'] as num, r!['contado'] as num),
+                if (r!['tarjeta_contado'] != null) ...[
+                  const SizedBox(height: 12),
+                  _lineaCuadre('Datáfono', r!['tarjeta_esperado'] as num, r!['tarjeta_contado'] as num),
+                ],
+              ]),
+        actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Aceptar'))],
+      ),
+    );
+  }
+
+  static Widget _lineaCuadre(String que, num esperado, num contado) {
     final dif = contado - esperado;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(dif.abs() < 0.005
-          ? 'Caja cerrada: cuadra al céntimo'
-          : 'Caja cerrada con ${dif > 0 ? 'sobrante' : 'faltante'} de ${euros(dif.abs())}'),
-    ));
+    final cuadra = dif.abs() < 0.005;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text('$que: esperado ${euros(esperado)} · contado ${euros(contado)}'),
+      Text(
+        cuadra ? 'Cuadra al céntimo' : '${dif > 0 ? 'Sobran' : 'Faltan'} ${euros(dif.abs())}',
+        style: titulo(20, color: cuadra ? C.verde : const Color(0xFFB3261E)),
+      ),
+    ]);
   }
 
   Future<void> _accion(Future<dynamic> Function() f) async {
@@ -266,7 +292,13 @@ class _CajaPageState extends State<CajaPage> {
         Wrap(
           spacing: 14,
           runSpacing: 14,
-          children: [
+          children: !(Perfil.cache?.esAdmin ?? false)
+              ? [
+                  // Cuadre ciego: el camarero no ve importes del turno
+                  _Cifra('Tickets del turno', '$_tickets', 'El cuadre se hace a ciegas al cerrar'),
+                  _Cifra('Mesas sin cobrar', '$_mesasAbiertas', null),
+                ]
+              : [
             _Cifra('Ventas del turno', euros(_totalVentas), '$_tickets tickets', destacada: true),
             _Cifra('Efectivo', euros(_ventas['efectivo'] ?? 0), null),
             _Cifra('Tarjeta', euros(_ventas['tarjeta'] ?? 0), null),
