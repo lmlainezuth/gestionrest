@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/tema.dart';
 import '../../main.dart';
 import 'colores.dart';
 
@@ -94,7 +95,7 @@ class _GrupoDialogState extends State<GrupoDialog> {
                         color: colorDe(c),
                         shape: BoxShape.circle,
                         border: Border.all(
-                          color: c == _color ? Colors.black : Colors.transparent,
+                          color: c == _color ? C.tinta : Colors.transparent,
                           width: 3,
                         ),
                       ),

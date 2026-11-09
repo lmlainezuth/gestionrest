@@ -1,6 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
-        android:label="gestionrest"
+        android:label="GestiónRest"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

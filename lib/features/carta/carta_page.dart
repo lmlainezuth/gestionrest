@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/tema.dart';
 import '../../main.dart';
 import '../ticketbai/modelos.dart' show euros;
 import 'alergenos.dart';
@@ -201,7 +202,7 @@ class _CartaPageState extends State<CartaPage> {
     return Opacity(
       opacity: activo ? 1 : 0.45,
       child: Material(
-        color: Colors.white,
+        color: C.blanco,
         borderRadius: BorderRadius.circular(14),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
@@ -220,13 +221,13 @@ class _CartaPageState extends State<CartaPage> {
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
                 const SizedBox(height: 4),
-                Text(_nombreArea(p['area_id']), style: const TextStyle(fontSize: 12, color: Colors.black54)),
+                Text(_nombreArea(p['area_id']), style: const TextStyle(fontSize: 12, color: C.gris)),
                 const Spacer(),
                 if (al.isNotEmpty)
                   Text(al.map((a) => alergenos[a] ?? a).join(' · '),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 11, color: Color(0xFF9A4A12))),
+                      style: const TextStyle(fontSize: 11, color: C.naranja)),
                 const SizedBox(height: 4),
                 Row(
                   children: [

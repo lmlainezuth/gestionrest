@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 
 import '../../core/tema.dart';
 import '../../main.dart';
+import '../auth/perfil.dart';
+import '../caja/cobro_dialog.dart';
 import '../carta/alergenos.dart';
 import '../carta/colores.dart';
 import '../ticketbai/modelos.dart' show euros;
+import '../ticketbai/ticket_view.dart';
 
 const _cursos = {'ya': 'Ya', '1': '1.º', '2': '2.º', 'postre': 'Postre'};
 const _siguienteCurso = {'ya': '1', '1': '2', '2': 'postre', 'postre': 'ya'};
@@ -74,7 +77,7 @@ class _ComandaPageState extends State<ComandaPage> {
       final pedido = await supabase
           .from('pedidos')
           .select('id, num_personas, total, creado_en, estado, '
-              'pedido_detalle(id, descripcion, cantidad, precio_unitario, nota, curso, estado_cocina, creado_en)')
+              'pedido_detalle(id, descripcion, cantidad, precio_unitario, nota, curso, estado_cocina, en_espera, creado_en)')
           .eq('mesa_id', widget.mesa['id'])
           .inFilter('estado', ['abierto', 'precuenta'])
           .order('creado_en')
@@ -83,7 +86,7 @@ class _ComandaPageState extends State<ComandaPage> {
       _grupos = List<Map<String, dynamic>>.from(r[0]);
       _productos = List<Map<String, dynamic>>.from(r[1]);
       _areas = {for (final a in r[2]) a['id'] as String: a['nombre'] as String};
-      _grupoId = _grupos.isEmpty ? null : _grupos.first['id'] as String;
+      _grupoId ??= _grupos.isEmpty ? null : _grupos.first['id'] as String;
       _pedido = pedido;
       if (pedido?['num_personas'] != null) _pax = pedido!['num_personas'] as int;
     } catch (e) {
@@ -147,8 +150,54 @@ class _ComandaPageState extends State<ComandaPage> {
         ],
       ),
     );
-    ctrl.dispose();
     if (nota != null) setState(() => l.nota = nota);
+  }
+
+  Future<void> _marchar(String curso) async {
+    try {
+      await supabase
+          .from('pedido_detalle')
+          .update({'en_espera': false})
+          .eq('pedido_id', _pedido!['id'])
+          .eq('curso', curso)
+          .eq('en_espera', true);
+      await _cargar();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Marchando ${curso == '2' ? 'segundos' : 'postres'}')),
+        );
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    }
+  }
+
+  Future<void> _servido(Map<String, dynamic> d) async {
+    await supabase.from('pedido_detalle').update({'estado_cocina': 'servido'}).eq('id', d['id']);
+    await _cargar();
+  }
+
+  Future<void> _precuenta() async {
+    await supabase.from('pedidos').update({'estado': 'precuenta'}).eq('id', _pedido!['id']);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Mesa ${widget.mesa['nombre']}: pide la cuenta')),
+    );
+    Navigator.pop(context, true);
+  }
+
+  Future<void> _cobrar() async {
+    final factura = await showDialog<Map<String, dynamic>>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => CobroDialog(pedido: _pedido!, mesaId: widget.mesa['id'] as String),
+    );
+    if (factura == null || !mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (_) => Dialog(child: SingleChildScrollView(child: TicketView(factura: factura))),
+    );
+    if (mounted) Navigator.pop(context, true);
   }
 
   Future<void> _enviar() async {
@@ -180,6 +229,7 @@ class _ComandaPageState extends State<ComandaPage> {
             'precio_unitario': l.precio,
             'nota': l.nota.isEmpty ? null : l.nota,
             'curso': l.curso,
+            'en_espera': l.curso == '2' || l.curso == 'postre',
           },
       ]);
       if (widget.mesa['disponibilidad'] != 'ocupada') {
@@ -321,7 +371,7 @@ class _ComandaPageState extends State<ComandaPage> {
               for (final g in _grupos)
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
-                  child: _ChipGrupo(
+                  child: ChipGrupo(
                     nombre: g['nombre'] as String,
                     color: colorDe(g['color'] as String?),
                     activo: _busqueda.isEmpty && g['id'] == _grupoId,
@@ -345,7 +395,7 @@ class _ComandaPageState extends State<ComandaPage> {
                   padding: const EdgeInsets.all(16),
                   children: [
                     for (final p in visibles)
-                      _BotonProducto(
+                      BotonProducto(
                         producto: p,
                         cantidad: _cantidadEnRonda(p['id'] as String),
                         onTap: () => _anadir(p),
@@ -396,6 +446,18 @@ class _ComandaPageState extends State<ComandaPage> {
                   ],
                 ),
                 const SizedBox(height: 6),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    for (final c in ['2', 'postre'])
+                      if (yaPedido.any((d) => d['curso'] == c && d['en_espera'] == true))
+                        OutlinedButton.icon(
+                          onPressed: () => _marchar(c),
+                          icon: const Icon(Icons.play_arrow, size: 18),
+                          label: Text('Marchar ${_cursos[c]}'),
+                        ),
+                  ],
+                ),
                 for (final d in yaPedido)
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 4),
@@ -404,7 +466,15 @@ class _ComandaPageState extends State<ComandaPage> {
                         Text('${(d['cantidad'] as num).toStringAsFixed(0)}× ',
                             style: const TextStyle(fontWeight: FontWeight.w700, color: C.gris)),
                         Expanded(child: Text(d['descripcion'] as String, style: const TextStyle(color: C.gris))),
-                        Text(_estadosCocina[d['estado_cocina']] ?? '', style: const TextStyle(fontSize: 12, color: C.gris)),
+                        if (d['estado_cocina'] == 'listo')
+                          TextButton(onPressed: () => _servido(d), child: const Text('Listo · Servir'))
+                        else
+                          Text(
+                            d['en_espera'] == true
+                                ? 'En espera'
+                                : _estadosCocina[d['estado_cocina']] ?? '',
+                            style: const TextStyle(fontSize: 12, color: C.gris),
+                          ),
                       ],
                     ),
                   ),
@@ -413,6 +483,33 @@ class _ComandaPageState extends State<ComandaPage> {
             ],
           ),
         ),
+        if (_pedido != null && _ronda.isEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+            child: Row(
+              children: [
+                if (_pedido!['estado'] == 'abierto')
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _precuenta,
+                      icon: const Icon(Icons.receipt_outlined),
+                      label: const Text('Pide la cuenta'),
+                    ),
+                  ),
+                if (_pedido!['estado'] == 'abierto' && (Perfil.cache?.rol != Rol.cocinero))
+                  const SizedBox(width: 8),
+                if (Perfil.cache?.rol != Rol.cocinero)
+                  Expanded(
+                    child: FilledButton.icon(
+                      style: FilledButton.styleFrom(backgroundColor: C.tinta),
+                      onPressed: _cobrar,
+                      icon: const Icon(Icons.point_of_sale),
+                      label: Text('Cobrar ${euros(_pedido!['total'] as num)}'),
+                    ),
+                  ),
+              ],
+            ),
+          ),
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
           child: FilledButton(
@@ -422,7 +519,7 @@ class _ComandaPageState extends State<ComandaPage> {
               children: [
                 Text(_enviando ? 'Enviando…' : 'Enviar · $_unidades uds.'),
                 const SizedBox(width: 12),
-                Text(euros(_totalRonda), style: titulo(17, color: Colors.white)),
+                Text(euros(_totalRonda), style: titulo(17, color: C.sobreAccion)),
               ],
             ),
           ),
@@ -461,7 +558,7 @@ class _ComandaPageState extends State<ComandaPage> {
                 children: [
                   Text(l.producto['nombre'] as String, style: const TextStyle(fontWeight: FontWeight.w600)),
                   Text(l.nota.isEmpty ? 'Añadir nota' : l.nota,
-                      style: TextStyle(fontSize: 12, color: l.nota.isEmpty ? C.gris : const Color(0xFF9A4A12))),
+                      style: TextStyle(fontSize: 12, color: l.nota.isEmpty ? C.gris : C.naranja)),
                 ],
               ),
             ),
@@ -538,8 +635,8 @@ class _Comensales extends StatelessWidget {
   }
 }
 
-class _ChipGrupo extends StatelessWidget {
-  const _ChipGrupo({required this.nombre, required this.color, required this.activo, required this.onTap});
+class ChipGrupo extends StatelessWidget {
+  const ChipGrupo({required this.nombre, required this.color, required this.activo, required this.onTap});
   final String nombre;
   final Color color;
   final bool activo;
@@ -562,8 +659,8 @@ class _ChipGrupo extends StatelessWidget {
       );
 }
 
-class _BotonProducto extends StatelessWidget {
-  const _BotonProducto({required this.producto, required this.cantidad, required this.onTap});
+class BotonProducto extends StatelessWidget {
+  const BotonProducto({required this.producto, required this.cantidad, required this.onTap});
   final Map<String, dynamic> producto;
   final double cantidad;
   final VoidCallback onTap;
@@ -605,7 +702,7 @@ class _BotonProducto extends StatelessWidget {
                             child: Container(
                               padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
                               decoration: BoxDecoration(
-                                color: const Color(0xFFEFEAE0),
+                                color: C.borde,
                                 borderRadius: BorderRadius.circular(5),
                               ),
                               child: Text(alergenosCorto[a] ?? a,
@@ -626,7 +723,7 @@ class _BotonProducto extends StatelessWidget {
                     radius: 14,
                     backgroundColor: C.verde,
                     child: Text(cantidad.toStringAsFixed(0),
-                        style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
+                        style: const TextStyle(color: C.sobreAccion, fontSize: 13, fontWeight: FontWeight.w700)),
                   ),
                 ),
             ],

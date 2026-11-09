@@ -22,6 +22,11 @@ class Perfil {
         activo: m['activo'] as bool,
       );
 
+  /// Último perfil cargado (para saber el rol desde cualquier pantalla).
+  static Perfil? cache;
+
+  bool get esAdmin => rol == Rol.admin;
+
   /// Perfil del usuario con sesión iniciada (null si no existe).
   static Future<Perfil?> actual() async {
     final uid = supabase.auth.currentUser?.id;
@@ -31,6 +36,7 @@ class Perfil {
         .select('id, nombre, rol, activo')
         .eq('id', uid)
         .maybeSingle();
-    return fila == null ? null : Perfil.fromMap(fila);
+    cache = fila == null ? null : Perfil.fromMap(fila);
+    return cache;
   }
 }

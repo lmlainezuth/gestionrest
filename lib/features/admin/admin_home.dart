@@ -4,8 +4,13 @@ import '../../core/tema.dart';
 import '../../main.dart';
 import '../auth/perfil.dart';
 import '../camarero/mesas_view.dart';
+import '../barra/barra_page.dart';
+import '../caja/caja_page.dart';
 import '../carta/carta_page.dart';
+import '../cocina/cocina_page.dart';
+import '../informes/informes_page.dart';
 import '../ticketbai/facturas_page.dart';
+import '../usuarios/usuarios_page.dart';
 
 class AdminHome extends StatefulWidget {
   const AdminHome({super.key, required this.perfil});
@@ -20,19 +25,26 @@ class _AdminHomeState extends State<AdminHome> {
 
   static const _secciones = [
     (icono: Icons.grid_view_rounded, titulo: 'Mesas'),
+    (icono: Icons.local_bar_outlined, titulo: 'Barra'),
     (icono: Icons.restaurant_menu, titulo: 'Carta'),
     (icono: Icons.point_of_sale, titulo: 'Caja'),
     (icono: Icons.receipt_long, titulo: 'Facturas'),
     (icono: Icons.bar_chart_rounded, titulo: 'Informes'),
     (icono: Icons.people_alt_outlined, titulo: 'Usuarios'),
+    (icono: Icons.soup_kitchen_outlined, titulo: 'Cocina'),
   ];
 
   @override
   Widget build(BuildContext context) {
-    final contenido = switch (_seccion) {
-      0 => const MesasView(),
-      1 => const CartaPage(),
-      3 => const FacturasPage(),
+    final contenido = switch (_secciones[_seccion].titulo) {
+      'Mesas' => const MesasView(),
+      'Barra' => const BarraPage(),
+      'Carta' => const CartaPage(),
+      'Caja' => const CajaPage(),
+      'Facturas' => const FacturasPage(),
+      'Informes' => const InformesPage(),
+      'Usuarios' => const UsuariosPage(),
+      'Cocina' => const CocinaPage(),
       _ => _Proximamente(_secciones[_seccion].titulo),
     };
 
@@ -42,7 +54,7 @@ class _AdminHomeState extends State<AdminHome> {
           // Menú lateral oscuro
           Container(
             width: 96,
-            color: C.tinta,
+            color: C.panel,
             padding: const EdgeInsets.symmetric(vertical: 18),
             child: Column(
               children: [
@@ -98,7 +110,7 @@ class _AdminHomeState extends State<AdminHome> {
                               backgroundColor: C.verde,
                               child: Text(
                                 widget.perfil.nombre.isEmpty ? '?' : widget.perfil.nombre[0].toUpperCase(),
-                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                                style: const TextStyle(color: C.sobreAccion, fontWeight: FontWeight.w700),
                               ),
                             ),
                             const SizedBox(width: 10),
@@ -136,11 +148,11 @@ class _ItemMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = activo ? C.tinta : const Color(0xFFB5B0A5);
+    final color = activo ? C.sobreAccion : C.gris;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Material(
-        color: activo ? const Color(0xFFF3F1EC) : Colors.transparent,
+        color: activo ? C.verde : Colors.transparent,
         borderRadius: BorderRadius.circular(14),
         child: InkWell(
           borderRadius: BorderRadius.circular(14),

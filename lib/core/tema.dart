@@ -3,16 +3,19 @@ import 'package:google_fonts/google_fonts.dart';
 
 /// Colores de la propuesta de diseño de GestiónRest.
 class C {
-  static const crema = Color(0xFFF6F4EF);
-  static const tinta = Color(0xFF1C1B19);
-  static const gris = Color(0xFF5E5A52);
+  static const crema = Color(0xFFF6F4EF); // fondo de página
+  static const panel = Color(0xFF1C1B19); // menú lateral y paneles de marca
+  static const blanco = Colors.white; // tarjetas y superficies
+  static const tinta = Color(0xFF1C1B19); // texto principal
+  static const gris = Color(0xFF5E5A52); // texto secundario
   static const borde = Color(0xFFE6E1D6);
   static const bordeFuerte = Color(0xFFD9D4C8);
-  static const verde = Color(0xFF0F5C4D);
-  static const naranja = Color(0xFFE8742A);
+  static const verde = Color(0xFF0F5C4D); // acción principal
+  static const sobreAccion = Colors.white; // texto sobre la acción principal
+  static const naranja = Color(0xFFE8742A); // avisos y acentos
   static const ocupada = Color(0xFFF7C9A6);
   static const reserva = Color(0xFF2F6DB5);
-  static const blanco = Colors.white;
+  static const libreBorde = Color(0xFFD9D4C8);
 }
 
 /// Títulos y cifras en Space Grotesk.
@@ -23,11 +26,12 @@ ThemeData temaGestionRest() {
   final base = ThemeData(useMaterial3: true, brightness: Brightness.light);
   final esquema = ColorScheme.fromSeed(seedColor: C.verde).copyWith(
     primary: C.verde,
-    onPrimary: C.blanco,
+    onPrimary: C.sobreAccion,
     secondary: C.naranja,
     surface: C.crema,
     onSurface: C.tinta,
     secondaryContainer: const Color(0xFFE3EEEA),
+    onSecondaryContainer: C.tinta,
     error: const Color(0xFFB3261E),
   );
   final radio12 = BorderRadius.circular(12);
@@ -51,7 +55,7 @@ ThemeData temaGestionRest() {
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
         backgroundColor: C.verde,
-        foregroundColor: C.blanco,
+        foregroundColor: C.sobreAccion,
         minimumSize: const Size(0, 52),
         padding: const EdgeInsets.symmetric(horizontal: 20),
         shape: RoundedRectangleBorder(borderRadius: radio14),
@@ -74,8 +78,8 @@ ThemeData temaGestionRest() {
       ),
     ),
     floatingActionButtonTheme: FloatingActionButtonThemeData(
-      backgroundColor: C.tinta,
-      foregroundColor: C.blanco,
+      backgroundColor: C.verde,
+      foregroundColor: C.sobreAccion,
       shape: RoundedRectangleBorder(borderRadius: radio14),
     ),
     inputDecorationTheme: InputDecorationTheme(
@@ -89,12 +93,12 @@ ThemeData temaGestionRest() {
     ),
     chipTheme: base.chipTheme.copyWith(
       backgroundColor: C.blanco,
-      selectedColor: C.tinta,
-      checkmarkColor: C.blanco,
+      selectedColor: C.verde,
+      checkmarkColor: C.sobreAccion,
       side: const BorderSide(color: C.bordeFuerte),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       labelStyle: GoogleFonts.inter(fontWeight: FontWeight.w600, color: C.tinta),
-      secondaryLabelStyle: GoogleFonts.inter(fontWeight: FontWeight.w600, color: C.blanco),
+      secondaryLabelStyle: GoogleFonts.inter(fontWeight: FontWeight.w600, color: C.sobreAccion),
     ),
     dialogTheme: DialogThemeData(
       backgroundColor: C.blanco,
@@ -109,11 +113,12 @@ ThemeData temaGestionRest() {
     dividerTheme: const DividerThemeData(color: C.borde, thickness: 1),
     snackBarTheme: SnackBarThemeData(
       backgroundColor: C.tinta,
+      contentTextStyle: GoogleFonts.inter(color: C.sobreAccion, fontWeight: FontWeight.w600),
       behavior: SnackBarBehavior.floating,
       shape: RoundedRectangleBorder(borderRadius: radio12),
     ),
     switchTheme: SwitchThemeData(
-      thumbColor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.selected) ? C.blanco : null),
+      thumbColor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.selected) ? C.sobreAccion : null),
       trackColor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.selected) ? C.verde : null),
     ),
   );

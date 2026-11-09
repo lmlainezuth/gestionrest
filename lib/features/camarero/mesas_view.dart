@@ -147,8 +147,8 @@ class _ChipZona extends StatelessWidget {
   Widget build(BuildContext context) {
     final fg = activa ? C.blanco : C.tinta;
     return Material(
-      color: activa ? C.tinta : C.blanco,
-      shape: StadiumBorder(side: BorderSide(color: activa ? C.tinta : C.bordeFuerte)),
+      color: activa ? C.verde : C.blanco,
+      shape: StadiumBorder(side: BorderSide(color: activa ? C.verde : C.bordeFuerte)),
       child: InkWell(
         customBorder: const StadiumBorder(),
         onTap: onTap,
@@ -206,11 +206,11 @@ class _MesaTile extends StatelessWidget {
         : pedido != null
             ? 'ocupada'
             : mesa['disponibilidad'] as String;
-    final (fondo, texto, borde, etiqueta) = switch (disp) {
-      'ocupada' => (C.ocupada, C.tinta, C.ocupada, 'Ocupada'),
-      'precuenta' => (C.tinta, C.blanco, C.tinta, 'Pide la cuenta'),
-      'reservada' => (C.blanco, C.tinta, C.reserva, 'Reservada'),
-      _ => (C.blanco, C.tinta, C.bordeFuerte, 'Libre'),
+    final (fondo, borde, texto, etiqueta) = switch (disp) {
+      'ocupada' => (C.ocupada, C.ocupada, C.tinta, 'Ocupada'),
+      'precuenta' => (C.tinta, C.tinta, Colors.white, 'Pide la cuenta'),
+      'reservada' => (C.blanco, C.reserva, C.tinta, 'Reservada'),
+      _ => (C.blanco, C.bordeFuerte, C.tinta, 'Libre'),
     };
     final capacidad = pedido?['num_personas'] ?? mesa['capacidad'];
     final minutos = pedido == null
@@ -244,8 +244,7 @@ class _MesaTile extends StatelessWidget {
                   ],
                 ),
                 const Spacer(),
-                if (pedido != null)
-                  Text(euros(pedido!['total'] as num), style: titulo(18, color: texto)),
+                if (pedido != null) Text(euros(pedido!['total'] as num), style: titulo(18, color: texto)),
                 Row(
                   children: [
                     Icon(Icons.person_outline, size: 16, color: texto.withValues(alpha: 0.7)),
@@ -254,8 +253,7 @@ class _MesaTile extends StatelessWidget {
                         style: TextStyle(fontSize: 13, color: texto.withValues(alpha: 0.8))),
                     const Spacer(),
                     if (pedido == null)
-                      Text(etiqueta,
-                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: texto)),
+                      Text(etiqueta, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: texto)),
                   ],
                 ),
               ],
