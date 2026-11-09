@@ -9,6 +9,10 @@ import '../auth/pin.dart';
 
 const _roles = {'admin': 'Administrador', 'camarero': 'Camarero', 'cocinero': 'Cocina'};
 
+/// Tipos al crear un usuario. "Gestión" es un camarero que solo ve caja diaria, gastos, proveedores y resumen
+/// (para la tablet de la oficina): sin mesas, barra ni cobros.
+const _tiposNuevo = {'admin': 'Admin', 'camarero': 'Camarero', 'cocinero': 'Cocina', 'gestion': 'Gestión'};
+
 /// Gestión del equipo: alta de usuarios, rol, activación y contraseña.
 class UsuariosPage extends StatefulWidget {
   const UsuariosPage({super.key});
@@ -250,11 +254,24 @@ class _NuevoUsuarioState extends State<_NuevoUsuario> {
       _guardando = true;
       _error = null;
     });
-    final error = await widget.funcion({
+    final gestion = _rol == 'gestion';
+    var error = await widget.funcion({
       'nombre': _nombre.text,
       'pin': _pin.text,
-      'rol': _rol,
+      'rol': gestion ? 'camarero' : _rol,
     });
+    if (error == null && gestion) {
+      // Le dejamos solo los permisos de gestión
+      try {
+        final equipo = List<Map<String, dynamic>>.from(await supabase.rpc('equipo_empresa'));
+        final nuevo = equipo.where((u) => (u['nombre'] as String).trim() == _nombre.text.trim()).toList();
+        if (nuevo.isNotEmpty) {
+          await supabase.from('empresa_usuarios').update({'permisos': permisosGestion}).eq('usuario_id', nuevo.last['id']);
+        }
+      } catch (e) {
+        error = 'Usuario creado, pero no se pudieron poner los permisos de gestión: $e';
+      }
+    }
     if (!mounted) return;
     if (error == null) {
       Navigator.pop(context, true);
@@ -288,11 +305,17 @@ class _NuevoUsuarioState extends State<_NuevoUsuario> {
             const SizedBox(height: 16),
             SegmentedButton<String>(
               segments: [
-                for (final r in _roles.entries) ButtonSegment(value: r.key, label: Text(r.value)),
+                for (final r in _tiposNuevo.entries) ButtonSegment(value: r.key, label: Text(r.value)),
               ],
               selected: {_rol},
+              showSelectedIcon: false,
               onSelectionChanged: (s) => setState(() => _rol = s.first),
             ),
+            if (_rol == 'gestion') ...[
+              const SizedBox(height: 8),
+              const Text('Solo verá Caja por días, Gastos, Proveedores y Números. Ideal para la tablet de la oficina.',
+                  style: TextStyle(fontSize: 12, color: Colors.black54)),
+            ],
             if (_error != null) ...[
               const SizedBox(height: 12),
               Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),

@@ -18,6 +18,9 @@ class TbaiXml {
     required String nombreSoftware,
     required String versionSoftware,
     Map<String, dynamic>? cliente,
+    bool sustituyeSimplificada = false, // factura completa que sustituye a un ticket
+    String? codigoRectificativa, // R1..R5 (por diferencias)
+    List<({String serie, int numero, DateTime fecha})> referencias = const [],
   }) {
     String n2(double v) => v.toStringAsFixed(2);
     String dos(int v) => v.toString().padLeft(2, '0');
@@ -49,7 +52,24 @@ class TbaiXml {
       ..write('<NumFactura>$numero</NumFactura>')
       ..write('<FechaExpedicionFactura>${f(fecha)}</FechaExpedicionFactura>')
       ..write('<HoraExpedicionFactura>${h(fecha)}</HoraExpedicionFactura>')
-      ..write('<FacturaSimplificada>${cliente == null ? 'S' : 'N'}</FacturaSimplificada>')
+      ..write('<FacturaSimplificada>${cliente == null ? 'S' : 'N'}</FacturaSimplificada>');
+    if (sustituyeSimplificada) b.write('<FacturaEmitidaSustitucionSimplificada>S</FacturaEmitidaSustitucionSimplificada>');
+    if (codigoRectificativa != null) {
+      b.write('<FacturaRectificativa><Codigo>$codigoRectificativa</Codigo><Tipo>I</Tipo></FacturaRectificativa>');
+    }
+    if (referencias.isNotEmpty) {
+      b.write('<FacturasRectificadasSustituidas>');
+      for (final r in referencias) {
+        b
+          ..write('<IDFacturaRectificadaSustituida>')
+          ..write('<SerieFactura>${_e(r.serie)}</SerieFactura>')
+          ..write('<NumFactura>${r.numero}</NumFactura>')
+          ..write('<FechaExpedicionFactura>${f(r.fecha)}</FechaExpedicionFactura>')
+          ..write('</IDFacturaRectificadaSustituida>');
+      }
+      b.write('</FacturasRectificadasSustituidas>');
+    }
+    b
       ..write('</CabeceraFactura><DatosFactura>')
       ..write('<DescripcionFactura>Servicio de restauración</DescripcionFactura>')
       ..write('<DetallesFactura>');
@@ -92,6 +112,33 @@ class TbaiXml {
       ..write('<Version>${_e(versionSoftware)}</Version>')
       ..write('</Software></HuellaTBAI></T:TicketBai>');
     return b.toString();
+  }
+
+  /// Fichero de anulación (urn:ticketbai:anulacion) de una factura ya enviada.
+  static String anulacion({
+    required String nifEmisor,
+    required String razonSocial,
+    required String serie,
+    required int numero,
+    required DateTime fecha,
+    required String licenciaTbai,
+    required String nifDesarrollador,
+    required String nombreSoftware,
+    required String versionSoftware,
+  }) {
+    String dos(int v) => v.toString().padLeft(2, '0');
+    final fe = '${dos(fecha.day)}-${dos(fecha.month)}-${fecha.year}';
+    return '<?xml version="1.0" encoding="UTF-8"?>'
+        '<T:AnulaTicketBai xmlns:T="urn:ticketbai:anulacion">'
+        '<Cabecera><IDVersionTBAI>1.2</IDVersionTBAI></Cabecera>'
+        '<IDFactura><Emisor><NIF>${_e(nifEmisor)}</NIF>'
+        '<ApellidosNombreRazonSocial>${_e(razonSocial)}</ApellidosNombreRazonSocial></Emisor>'
+        '<CabeceraFactura><SerieFactura>${_e(serie)}</SerieFactura><NumFactura>$numero</NumFactura>'
+        '<FechaExpedicionFactura>$fe</FechaExpedicionFactura></CabeceraFactura></IDFactura>'
+        '<HuellaTBAI><Software><LicenciaTBAI>${_e(licenciaTbai)}</LicenciaTBAI>'
+        '<EntidadDesarrolladora><NIF>${_e(nifDesarrollador)}</NIF></EntidadDesarrolladora>'
+        '<Nombre>${_e(nombreSoftware)}</Nombre><Version>${_e(versionSoftware)}</Version></Software></HuellaTBAI>'
+        '</T:AnulaTicketBai>';
   }
 
   static String _e(String s) => s

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../core/panel_lateral.dart';
+
 import '../../core/tema.dart';
 import '../../main.dart';
 import '../ticketbai/modelos.dart' show euros;
@@ -81,9 +83,9 @@ class _CartaPageState extends State<CartaPage> {
 
   Future<void> _abrirProducto([Map<String, dynamic>? producto]) async {
     if (_grupoId == null) return;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (_) => ProductoDialog(grupoId: _grupoId!, areas: _areas, producto: producto),
+    final ok = await mostrarPanel<bool>(
+      context,
+      (_) => ProductoDialog(grupoId: _grupoId!, areas: _areas, producto: producto),
     );
     if (ok == true) {
       await _cargarProductos();

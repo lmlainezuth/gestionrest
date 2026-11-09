@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/panel_lateral.dart';
 import '../../main.dart';
 import 'alergenos.dart';
 import 'package:file_picker/file_picker.dart';
@@ -138,13 +139,12 @@ class _ProductoDialogState extends State<ProductoDialog> {
       return n == null || n < 0 ? 'Importe no válido' : null;
     }
 
-    return AlertDialog(
-      title: Text(p == null ? 'Nuevo producto' : 'Editar producto'),
-      content: SizedBox(
-        width: 480,
-        child: Form(
+    return PanelLateral(
+      encabezado: p == null ? 'Nuevo producto' : 'Editar producto',
+      boton: _guardando ? 'Guardando…' : 'Guardar producto',
+      onBoton: _guardando ? null : _guardar,
+      cuerpo: Form(
           key: _form,
-          child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -277,13 +277,7 @@ class _ProductoDialogState extends State<ProductoDialog> {
                   Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
               ],
             ),
-          ),
-        ),
       ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
-        FilledButton(onPressed: _guardando ? null : _guardar, child: const Text('Guardar')),
-      ],
     );
   }
 }

@@ -1,0 +1,7 @@
+# Netlify: la web (flutter build web) y el servicio puente TicketBAI
+[build]
+  publish = "build/web"
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"

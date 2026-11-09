@@ -127,11 +127,10 @@ class _AdminHomeState extends State<AdminHome> {
     };
 
     if (_visibles.isEmpty) return const Scaffold(body: Center(child: Text('Sin permisos asignados')));
-    return Scaffold(
-      body: AvisosListo(child: Row(
-        children: [
-          // Menú lateral oscuro
-          Container(
+    return LayoutBuilder(builder: (context, c) {
+      // TPV pequeño, tablet en vertical o móvil: el menú pasa a un cajón (botón ☰).
+      final estrecho = c.maxWidth < 760;
+      final menu = Container(
             width: 96,
             color: C.panel,
             padding: const EdgeInsets.symmetric(vertical: 18),
@@ -154,7 +153,10 @@ class _AdminHomeState extends State<AdminHome> {
                             icono: _visibles[i].icono,
                             texto: _visibles[i].titulo,
                             activo: i == _seccion,
-                            onTap: () => setState(() => _seccion = i),
+                            onTap: () {
+                              setState(() => _seccion = i);
+                              if (estrecho) Navigator.of(context).pop();
+                            },
                           ),
                       ],
                     ),
@@ -169,27 +171,50 @@ class _AdminHomeState extends State<AdminHome> {
                 ),
               ],
             ),
-          ),
-          // Contenido
-          Expanded(
+          );
+      return Scaffold(
+        drawer: estrecho ? Drawer(width: 110, backgroundColor: C.panel, child: SafeArea(child: menu)) : null,
+        body: SafeArea(
+          child: AvisosListo(
+            child: Row(children: [
+              if (!estrecho) menu,
+              Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Container(
                   height: 76,
-                  padding: const EdgeInsets.symmetric(horizontal: 28),
+                  padding: EdgeInsets.symmetric(horizontal: estrecho ? 8 : 28),
                   decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: C.borde))),
                   child: Row(
                     children: [
-                      Text(_visibles[_seccion].titulo, style: titulo(28)),
-                      const Spacer(),
-                      OutlinedButton.icon(
-                        onPressed: _empresas,
-                        icon: const Icon(Icons.storefront_outlined),
-                        label: Text(widget.perfil.empresaNombre ?? 'Empresa'),
+                      if (estrecho)
+                        Builder(
+                          builder: (ctx) => IconButton(
+                            tooltip: 'Menú',
+                            icon: const Icon(Icons.menu),
+                            onPressed: () => Scaffold.of(ctx).openDrawer(),
+                          ),
+                        ),
+                      Flexible(
+                        child: Text(_visibles[_seccion].titulo,
+                            style: titulo(estrecho ? 22 : 28), overflow: TextOverflow.ellipsis),
                       ),
-                      const SizedBox(width: 12),
-                      Container(
+                      const Spacer(),
+                      if (estrecho)
+                        IconButton(
+                          tooltip: widget.perfil.empresaNombre ?? 'Empresa',
+                          onPressed: _empresas,
+                          icon: const Icon(Icons.storefront_outlined),
+                        )
+                      else
+                        OutlinedButton.icon(
+                          onPressed: _empresas,
+                          icon: const Icon(Icons.storefront_outlined),
+                          label: Text(widget.perfil.empresaNombre ?? 'Empresa'),
+                        ),
+                      if (!estrecho) const SizedBox(width: 12),
+                      if (!estrecho) Container(
                         padding: const EdgeInsets.fromLTRB(6, 6, 14, 6),
                         decoration: BoxDecoration(
                           color: C.blanco,
@@ -226,9 +251,11 @@ class _AdminHomeState extends State<AdminHome> {
               ],
             ),
           ),
-        ],
-      )),
-    );
+            ]),
+          ),
+        ),
+      );
+    });
   }
 }
 

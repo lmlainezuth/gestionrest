@@ -55,3 +55,9 @@ supabase/datos/
 *.keystore
 *clave*
 flutter_01.png
+*.p12
+*.pfx
+*.pem
+
+# Local Netlify folder
+.netlify

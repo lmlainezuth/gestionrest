@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/panel_lateral.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
 
@@ -55,55 +56,33 @@ class _ClientesTabState extends State<ClientesTab> {
         const SizedBox(height: 16),
         if (lista.isEmpty) const Padding(padding: EdgeInsets.all(24), child: Text('Sin clientes', style: TextStyle(color: C.gris))),
         for (final c in lista)
-          ListTile(
-            leading: const Icon(Icons.badge_outlined),
-            title: Text(c['nombre'] as String),
-            subtitle: Text([c['documento'], c['direccion']].where((x) => x != null && '$x'.isNotEmpty).join(' · ')),
-            onTap: () => _editar(c),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: TarjetaFila(
+              onTap: () => _editar(c),
+              child: Row(children: [
+                const IconoFila(Icons.badge_outlined, C.verde),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(c['nombre'] as String, style: titulo(17), maxLines: 1, overflow: TextOverflow.ellipsis),
+                    Text([c['documento'], c['direccion']].where((x) => x != null && '$x'.isNotEmpty).join(' · '),
+                        style: const TextStyle(color: C.gris, fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  ]),
+                ),
+                const Icon(Icons.chevron_right, color: C.gris),
+              ]),
+            ),
           ),
       ],
     );
   }
 }
 
-/// Diálogo de alta/edición de cliente. Devuelve el cliente guardado.
+/// Alta/edición de cliente en panel lateral. Devuelve el cliente guardado.
 Future<Map<String, dynamic>?> editarCliente(BuildContext context, [Map<String, dynamic>? c]) async {
-  final nombre = TextEditingController(text: c?['nombre'] as String?);
-  final nif = TextEditingController(text: c?['documento'] as String?);
-  final telefono = TextEditingController(text: c?['telefono'] as String?);
-  final direccion = TextEditingController(text: c?['direccion'] as String?);
-  final ok = await showDialog<bool>(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      title: Text(c == null ? 'Nuevo cliente' : 'Editar cliente'),
-      content: SizedBox(
-        width: 420,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: nombre, autofocus: true, decoration: const InputDecoration(labelText: 'Nombre o razón social')),
-            const SizedBox(height: 12),
-            TextField(controller: nif, decoration: const InputDecoration(labelText: 'NIF / CIF')),
-            const SizedBox(height: 12),
-            TextField(controller: direccion, decoration: const InputDecoration(labelText: 'Dirección')),
-            const SizedBox(height: 12),
-            TextField(controller: telefono, decoration: const InputDecoration(labelText: 'Teléfono (opcional)')),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
-        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Guardar')),
-      ],
-    ),
-  );
-  if (ok != true || nombre.text.trim().isEmpty) return null;
-  final datos = {
-    'nombre': nombre.text.trim(),
-    'documento': nif.text.trim().toUpperCase(),
-    'direccion': direccion.text.trim(),
-    'telefono': telefono.text.trim(),
-  };
+  final datos = await mostrarPanel<Map<String, dynamic>>(context, (_) => _PanelCliente(cliente: c));
+  if (datos == null) return null;
   try {
     return c == null
         ? await supabase.from('clientes').insert(datos).select().single()
@@ -112,4 +91,57 @@ Future<Map<String, dynamic>?> editarCliente(BuildContext context, [Map<String, d
     if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
     return null;
   }
+}
+
+class _PanelCliente extends StatefulWidget {
+  const _PanelCliente({required this.cliente});
+  final Map<String, dynamic>? cliente;
+
+  @override
+  State<_PanelCliente> createState() => _PanelClienteState();
+}
+
+class _PanelClienteState extends State<_PanelCliente> {
+  late final c = widget.cliente;
+  late final _nombre = TextEditingController(text: c?['nombre'] as String?);
+  late final _nif = TextEditingController(text: c?['documento'] as String?);
+  late final _direccion = TextEditingController(text: c?['direccion'] as String?);
+  late final _telefono = TextEditingController(text: c?['telefono'] as String?);
+  String? _error;
+
+  void _guardar() {
+    if (_nombre.text.trim().isEmpty || _nif.text.trim().isEmpty) {
+      setState(() => _error = 'Para facturar hacen falta el nombre y el NIF');
+      return;
+    }
+    Navigator.pop(context, {
+      'nombre': _nombre.text.trim(),
+      'documento': _nif.text.trim().toUpperCase(),
+      'direccion': _direccion.text.trim(),
+      'telefono': _telefono.text.trim(),
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => PanelLateral(
+        encabezado: c == null ? 'Nuevo cliente' : 'Editar cliente',
+        boton: 'Guardar cliente',
+        onBoton: _guardar,
+        cuerpo: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          const EtiquetaCampo('Nombre o razón social'),
+          TextField(controller: _nombre, autofocus: c == null, decoration: const InputDecoration(hintText: 'Ej. Construcciones Arana S.L.')),
+          const EtiquetaCampo('NIF / CIF'),
+          TextField(controller: _nif, textCapitalization: TextCapitalization.characters, decoration: const InputDecoration(hintText: 'B12345678')),
+          const EtiquetaCampo('Dirección'),
+          TextField(controller: _direccion, maxLines: 2, decoration: const InputDecoration(hintText: 'Calle, número, CP y población')),
+          const EtiquetaCampo('Teléfono'),
+          TextField(controller: _telefono, keyboardType: TextInputType.phone, decoration: const InputDecoration(hintText: 'Opcional')),
+          const SizedBox(height: 8),
+          const Text('Estos datos salen en la factura completa (con NIF) que pide el cliente.', style: TextStyle(color: C.gris, fontSize: 13)),
+          if (_error != null) ...[
+            const SizedBox(height: 12),
+            Text(_error!, style: const TextStyle(color: Color(0xFFB3261E), fontWeight: FontWeight.w600)),
+          ],
+        ]),
+      );
 }
