@@ -15,3 +15,21 @@ const alergenos = <String, String>{
   'altramuces': 'Altramuces',
   'moluscos': 'Moluscos',
 };
+
+/// Abreviaturas para mostrar en botones y comandas.
+const alergenosCorto = <String, String>{
+  'gluten': 'G',
+  'crustaceos': 'CR',
+  'huevo': 'H',
+  'pescado': 'P',
+  'cacahuete': 'CA',
+  'soja': 'S',
+  'lacteos': 'L',
+  'frutos_cascara': 'FC',
+  'apio': 'AP',
+  'mostaza': 'MO',
+  'sesamo': 'SE',
+  'sulfitos': 'SU',
+  'altramuces': 'AL',
+  'moluscos': 'M',
+};

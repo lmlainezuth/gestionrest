@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../../core/tema.dart';
 import '../../main.dart';
+import '../comanda/comanda_page.dart';
+import '../ticketbai/modelos.dart' show euros;
 
 /// Plano de mesas por salón (zona), con el estilo de la propuesta de diseño.
 class MesasView extends StatefulWidget {
@@ -14,6 +16,7 @@ class MesasView extends StatefulWidget {
 class _MesasViewState extends State<MesasView> {
   late Future<List<Map<String, dynamic>>> _salones = _cargar();
   String? _salonId;
+  Map<String, Map<String, dynamic>> _abiertos = {};
 
   Future<List<Map<String, dynamic>>> _cargar() async {
     final filas = await supabase
@@ -21,7 +24,23 @@ class _MesasViewState extends State<MesasView> {
         .select('id, nombre, mesas(id, nombre, capacidad, disponibilidad, activo)')
         .eq('activo', true)
         .order('orden');
+    final pedidos = await supabase
+        .from('pedidos')
+        .select('mesa_id, total, creado_en, num_personas, estado')
+        .inFilter('estado', ['abierto', 'precuenta']);
+    _abiertos = {
+      for (final p in pedidos)
+        if (p['mesa_id'] != null) p['mesa_id'] as String: p,
+    };
     return List<Map<String, dynamic>>.from(filas);
+  }
+
+  Future<void> _abrir(Map<String, dynamic> mesa, String zona) async {
+    final cambio = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => ComandaPage(mesa: mesa, zona: zona)),
+    );
+    if (cambio == true) await _recargar();
   }
 
   Future<void> _recargar() async {
@@ -88,7 +107,14 @@ class _MesasViewState extends State<MesasView> {
               Wrap(
                 spacing: 14,
                 runSpacing: 14,
-                children: [for (final m in mesas) _MesaTile(mesa: m)],
+                children: [
+                  for (final m in mesas)
+                    _MesaTile(
+                      mesa: m,
+                      pedido: _abiertos[m['id']],
+                      onTap: () => _abrir(m, salon['nombre'] as String),
+                    ),
+                ],
               ),
             ],
           ),
@@ -168,19 +194,28 @@ class _Leyenda extends StatelessWidget {
 }
 
 class _MesaTile extends StatelessWidget {
-  const _MesaTile({required this.mesa});
+  const _MesaTile({required this.mesa, required this.pedido, required this.onTap});
   final Map<String, dynamic> mesa;
+  final Map<String, dynamic>? pedido;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final disp = mesa['disponibilidad'] as String;
+    final disp = pedido?['estado'] == 'precuenta'
+        ? 'precuenta'
+        : pedido != null
+            ? 'ocupada'
+            : mesa['disponibilidad'] as String;
     final (fondo, texto, borde, etiqueta) = switch (disp) {
       'ocupada' => (C.ocupada, C.tinta, C.ocupada, 'Ocupada'),
       'precuenta' => (C.tinta, C.blanco, C.tinta, 'Pide la cuenta'),
       'reservada' => (C.blanco, C.tinta, C.reserva, 'Reservada'),
       _ => (C.blanco, C.tinta, C.bordeFuerte, 'Libre'),
     };
-    final capacidad = mesa['capacidad'];
+    final capacidad = pedido?['num_personas'] ?? mesa['capacidad'];
+    final minutos = pedido == null
+        ? null
+        : DateTime.now().difference(DateTime.parse(pedido!['creado_en'] as String)).inMinutes;
 
     return Material(
       color: fondo,
@@ -190,12 +225,7 @@ class _MesaTile extends StatelessWidget {
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
-        onTap: () {
-          // Siguiente paso: abrir la comanda de esta mesa.
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Mesa ${mesa['nombre']} · $etiqueta')),
-          );
-        },
+        onTap: onTap,
         child: SizedBox(
           width: 150,
           height: 118,
@@ -204,8 +234,18 @@ class _MesaTile extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(mesa['nombre'] as String, style: titulo(30, color: texto)),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(mesa['nombre'] as String, style: titulo(30, color: texto)),
+                    const Spacer(),
+                    if (minutos != null)
+                      Text('$minutos min', style: TextStyle(fontSize: 12, color: texto.withValues(alpha: 0.8))),
+                  ],
+                ),
                 const Spacer(),
+                if (pedido != null)
+                  Text(euros(pedido!['total'] as num), style: titulo(18, color: texto)),
                 Row(
                   children: [
                     Icon(Icons.person_outline, size: 16, color: texto.withValues(alpha: 0.7)),
@@ -213,8 +253,9 @@ class _MesaTile extends StatelessWidget {
                     Text(capacidad == null ? '—' : '$capacidad pax',
                         style: TextStyle(fontSize: 13, color: texto.withValues(alpha: 0.8))),
                     const Spacer(),
-                    Text(etiqueta,
-                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: texto)),
+                    if (pedido == null)
+                      Text(etiqueta,
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: texto)),
                   ],
                 ),
               ],
