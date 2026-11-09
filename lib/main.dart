@@ -4,9 +4,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'core/conexion.dart';
 import 'core/config.dart';
 import 'core/tema.dart';
 import 'features/auth/auth_gate.dart';
+import 'features/ticketbai/envios_pendientes.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,7 +19,10 @@ Future<void> main() async {
   await Supabase.initialize(
     url: Config.supabaseUrl,
     anonKey: Config.supabaseKey,
+    // Sin conexión, las peticiones fallan al instante en vez de dejar la app colgada
+    httpClient: ClienteConLimite(),
   );
+  Conexion.iniciar();
   runApp(const GestionRestApp());
 }
 
@@ -40,6 +45,8 @@ class GestionRestApp extends StatelessWidget {
       supportedLocales: const [Locale('es')],
       localizationsDelegates: GlobalMaterialLocalizations.delegates,
       home: const AuthGate(),
+      // Aviso TicketBAI (pendientes, rechazadas, modo no productivo) en todas las pantallas
+      builder: (context, child) => AvisoTbai(child: child ?? const SizedBox()),
     );
   }
 }

@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../../core/aviso_sin_conexion.dart';
+import '../../core/conexion.dart';
+import '../../core/red.dart';
 import '../../core/panel_lateral.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
@@ -33,7 +36,24 @@ class _CajaDiariaPageState extends State<CajaDiariaPage> {
     _cargar();
   }
 
+  String? _errorCarga;
+
+  /// Carga sin quedarse colgada: sin internet enseña el aviso y se reintenta sola.
   Future<void> _cargar() async {
+    try {
+      await online(_cargarDatos);
+      if (_errorCarga != null && mounted) setState(() => _errorCarga = null);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorCarga = textoError(e);
+          _cargando = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _cargarDatos() async {
     final (desde, hasta) = rangoMes(_mes);
     _cajas = List<Map<String, dynamic>>.from(await supabase
         .from('cajas_diarias')
@@ -54,7 +74,7 @@ class _CajaDiariaPageState extends State<CajaDiariaPage> {
         await supabase.from('cajas_diarias').upsert(r, onConflict: 'empresa_id,fecha');
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(textoError(e))));
     }
     await _cargar();
   }
@@ -107,7 +127,8 @@ class _CajaDiariaPageState extends State<CajaDiariaPage> {
           ]),
         ),
         const SizedBox(height: 16),
-        if (_cargando) const Padding(padding: EdgeInsets.all(30), child: Center(child: CircularProgressIndicator())),
+        if (_errorCarga != null) SizedBox(height: 320, child: AvisoSinConexion(_errorCarga!, onReintentar: _cargar)),
+        if (_cargando && _errorCarga == null) const Padding(padding: EdgeInsets.all(30), child: Center(child: CircularProgressIndicator())),
         if (!_cargando && _cajas.isEmpty)
           const Padding(
             padding: EdgeInsets.all(30),

@@ -1,12 +1,18 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/aviso_sin_conexion.dart';
+import '../../core/conexion.dart';
+import '../../core/red.dart';
 import '../../core/certificado_equipo.dart';
+import '../../core/firma_equipo.dart' if (dart.library.io) '../../core/firma_equipo_io.dart';
 
 import '../../core/tema.dart';
+import '../barra/venta_offline.dart' show VentaOffline;
+import '../ticketbai/cadena_equipo.dart';
 import '../../main.dart';
 import '../ticketbai/tbai_proveedor.dart' show probarCertificado;
-import '../carta/colores.dart' show leerImporte;
+import '../ticketbai/facturacion_service.dart' show FacturacionService;
 
 /// Datos fiscales y comerciales del negocio (empresa + TicketBAI + serie de caja).
 class EmpresaTab extends StatefulWidget {
@@ -23,8 +29,8 @@ class _EmpresaTabState extends State<EmpresaTab> {
   final _nif = TextEditingController();
   final _direccion = TextEditingController();
   final _telefono = TextEditingController();
-  final _iva = TextEditingController();
   final _serie = TextEditingController();
+  final _serieEquipo = TextEditingController(); // serie propia de este equipo (cobro sin internet)
   final _licencia = TextEditingController();
   final _nifDesarrollador = TextEditingController();
   String _entorno = 'simulado';
@@ -51,12 +57,12 @@ class _EmpresaTabState extends State<EmpresaTab> {
       _nif.text = _tbai!['nif'] as String? ?? '';
       _direccion.text = _empresa!['direccion'] as String? ?? '';
       _telefono.text = _empresa!['telefono'] as String? ?? '';
-      _iva.text = (_tbai!['tipo_iva'] as num).toStringAsFixed(0);
       _serie.text = _caja!['serie_factura'] as String? ?? '';
       _licencia.text = _tbai!['licencia_tbai'] as String? ?? '';
       _nifDesarrollador.text = _tbai!['nif_desarrollador'] as String? ?? '';
       _entorno = _tbai!['entorno'] as String? ?? 'simulado';
       _certEquipo = (await CertificadoEquipo.leer())?.nombre;
+      _serieEquipo.text = await CadenaEquipo.serie() ?? '';
     } catch (e) {
       _error = '$e';
     }
@@ -67,27 +73,60 @@ class _EmpresaTabState extends State<EmpresaTab> {
     if (!_form.currentState!.validate()) return;
     setState(() => _guardando = true);
     final nif = _nif.text.trim().toUpperCase();
-    final iva = leerImporte(_iva.text)!;
+    final serie = _serie.text.trim().toUpperCase();
     try {
+      // Paso a producción: serie nueva y limpia (no se encadena con facturas de pruebas)
+      if (_entorno == 'produccion' && _tbai!['entorno'] != 'produccion') {
+        final usadas = await supabase.from('facturas').select('id').eq('cadena', serie).limit(1);
+        if ((usadas as List).isNotEmpty) {
+          throw 'Para producción usa una serie nueva sin facturas (por ejemplo A1); "$serie" ya tiene facturas de pruebas';
+        }
+        FacturacionService.comprobarConfig({
+          'entorno': 'produccion',
+          'licencia_tbai': _licencia.text.trim(),
+          'nif_desarrollador': _nifDesarrollador.text.trim(),
+          'nif': nif,
+        });
+      }
+      // Desde producción no se vuelve a pruebas/simulado: los tickets dejarían de llegar a Hacienda
+      if (_tbai!['entorno'] == 'produccion' && _entorno != 'produccion') {
+        throw 'El bar ya factura en producción: no se puede volver a pruebas ni a simulado';
+      }
+      // En producción la serie no se cambia: rompería la cadena de facturas
+      if (_tbai!['entorno'] == 'produccion' && serie != _caja!['serie_factura']) {
+        throw 'En producción no se puede cambiar la serie';
+      }
       await supabase.from('empresa').update({
         'nombre': _nombre.text.trim(),
         'documento_fiscal': nif,
         'direccion': _direccion.text.trim(),
         'telefono': _telefono.text.trim(),
-        'impuesto_porcentaje': iva,
       }).eq('id', _empresa!['id']);
       await supabase.from('tbai_config').update({
         'nif': nif,
         'razon_social': _razon.text.trim(),
-        'tipo_iva': iva,
         'licencia_tbai': _licencia.text.trim().isEmpty ? null : _licencia.text.trim(),
         'nif_desarrollador': _nifDesarrollador.text.trim().isEmpty ? null : _nifDesarrollador.text.trim().toUpperCase(),
         'entorno': _entorno,
       }).eq('id', _tbai!['id']);
-      await supabase.from('cajas').update({'serie_factura': _serie.text.trim().toUpperCase()}).eq('id', _caja!['id']);
+      final serieEquipo = _serieEquipo.text.trim().toUpperCase();
+      if (serieEquipo.isNotEmpty && (serieEquipo == serie || !RegExp(r'^[A-Z0-9]{1,10}$').hasMatch(serieEquipo))) {
+        throw 'La serie de este equipo debe ser distinta de la de la caja y solo letras y números (ej. B1)';
+      }
+      final serieEquipoAntes = await CadenaEquipo.serie() ?? '';
+      if (serieEquipo != serieEquipoAntes) {
+        if (_tbai!['entorno'] == 'produccion' && serieEquipoAntes.isNotEmpty) {
+          throw 'En producción no se cambia la serie de un equipo que ya factura';
+        }
+        await CadenaEquipo.guardarSerie(serieEquipo);
+        await VentaOffline.guardarContexto();
+      }
+      await supabase.from('cajas').update({'serie_factura': serie}).eq('id', _caja!['id']);
+      _tbai!['entorno'] = _entorno;
+      _caja!['serie_factura'] = serie;
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Datos guardados')));
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(textoError(e))));
     }
     if (mounted) setState(() => _guardando = false);
   }
@@ -95,7 +134,15 @@ class _EmpresaTabState extends State<EmpresaTab> {
   @override
   Widget build(BuildContext context) {
     if (_cargando) return const Center(child: CircularProgressIndicator());
-    if (_error != null) return Center(child: Text('Error: $_error'));
+    if (_error != null) {
+      return AvisoSinConexion(textoError(_error), onReintentar: () {
+        setState(() {
+          _error = null;
+          _cargando = true;
+        });
+        _cargar();
+      });
+    }
     Widget campo(TextEditingController c, String etiqueta, {String? Function(String?)? validar, String? ayuda}) =>
         Padding(
           padding: const EdgeInsets.only(bottom: 14),
@@ -128,8 +175,7 @@ class _EmpresaTabState extends State<EmpresaTab> {
                 const SizedBox(height: 12),
                 campo(_razon, 'Razón social', validar: obligatorio, ayuda: 'Sale en los tickets y facturas'),
                 campo(_nif, 'NIF', validar: (v) => (v ?? '').trim().length == 9 ? null : 'El NIF tiene 9 caracteres'),
-                campo(_iva, 'IVA de hostelería (%)', validar: (v) => leerImporte(v ?? '') == null ? 'Número no válido' : null),
-                campo(_serie, 'Serie de facturas de esta caja', validar: obligatorio, ayuda: 'Ejemplo: T1. Las facturas con NIF usan la serie + "F"'),
+                campo(_serie, 'Serie de facturas de esta caja', validar: obligatorio, ayuda: 'Ejemplo: T1. Con NIF: serie + "F"; rectificativas: serie + "R". El IVA se elige en cada producto de la carta'),
                 const SizedBox(height: 8),
                 Text('TicketBAI', style: titulo(20)),
                 const SizedBox(height: 12),
@@ -206,8 +252,9 @@ class _EmpresaTabState extends State<EmpresaTab> {
                     Text('Certificado de este equipo', style: titulo(16)),
                     const SizedBox(height: 4),
                     const Text(
-                        'Para enviar las facturas a Hacienda desde este TPV o PC. Se instala una vez en cada equipo que cobra. '
-                        'La firma la sigue haciendo el servidor.',
+                        'Con el certificado instalado, este TPV o PC firma los tickets él mismo y puede cobrar aunque se '
+                        'caiga internet (se envían solos a Hacienda al volver la conexión). Sin él, firma el servidor y '
+                        'sin internet no se puede cobrar.',
                         style: TextStyle(color: C.gris, fontSize: 13)),
                     const SizedBox(height: 10),
                     Wrap(spacing: 10, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
@@ -216,7 +263,7 @@ class _EmpresaTabState extends State<EmpresaTab> {
                       OutlinedButton.icon(
                         onPressed: () async {
                           final f = await FilePicker.pickFile();
-                          if (f == null || !mounted) return;
+                          if (f == null || !context.mounted) return;
                           final ctrl = TextEditingController();
                           final clave = await showDialog<String>(
                             context: context,
@@ -231,8 +278,21 @@ class _EmpresaTabState extends State<EmpresaTab> {
                             ),
                           );
                           if (clave == null) return;
-                          await CertificadoEquipo.guardar(await f.readAsBytes(), clave, f.name);
-                          if (mounted) setState(() => _certEquipo = f.name);
+                          final bytes = await f.readAsBytes();
+                          try {
+                            // Comprueba contraseña y clave privada antes de guardarlo
+                            final c = await FirmaEquipo.certificado(bytes, clave);
+                            await CertificadoEquipo.guardar(bytes, clave, f.name);
+                            if (!context.mounted) return;
+                            setState(() => _certEquipo = f.name);
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                                content: Text('Certificado instalado: ${c.titular} · caduca ${c.caduca.toLocal().toString().substring(0, 10)}')));
+                          } catch (e) {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context)
+                                  .showSnackBar(SnackBar(content: Text('No se pudo abrir el certificado (¿contraseña?): $e')));
+                            }
+                          }
                         },
                         icon: const Icon(Icons.key_outlined),
                         label: Text(_certEquipo == null ? 'Instalar certificado (.pfx)' : 'Cambiar'),
@@ -246,6 +306,16 @@ class _EmpresaTabState extends State<EmpresaTab> {
                           child: const Text('Quitar'),
                         ),
                     ]),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _serieEquipo,
+                    decoration: const InputDecoration(
+                      labelText: 'Serie propia de este equipo (para cobrar sin internet)',
+                      helperText: 'Ej. B1 en el TPV de barra. Cada equipo la suya, distinta de la de la caja; '
+                          'déjalo vacío en los equipos que no cobran sin internet. Necesita el certificado.',
+                      helperMaxLines: 3,
+                    ),
+                  ),
                   ]),
                 ),
                 const SizedBox(height: 14),

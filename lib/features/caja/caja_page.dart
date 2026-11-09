@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../../core/aviso_sin_conexion.dart';
+import '../../core/conexion.dart';
+import '../../core/red.dart';
 import '../../core/impresion.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
@@ -193,14 +196,22 @@ class _CajaPageState extends State<CajaPage> {
       await f();
       await _cargar();
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(textoError(e))));
     }
   }
 
   @override
   Widget build(BuildContext context) {
     if (_cargando) return const Center(child: CircularProgressIndicator());
-    if (_error != null) return Center(child: Text('Error: $_error'));
+    if (_error != null) {
+      return AvisoSinConexion(textoError(_error), onReintentar: () {
+        setState(() {
+          _error = null;
+          _cargando = true;
+        });
+        _cargar();
+      });
+    }
 
     if (_turno == null) {
       return Center(

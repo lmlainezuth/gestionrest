@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/aviso_sin_conexion.dart';
 import '../../core/avisos_listo.dart';
 import '../../core/empresa_dispositivo.dart';
 import '../../core/pestanas.dart';
@@ -167,7 +168,7 @@ class _AdminHomeState extends State<AdminHome> {
                   icono: Icons.logout,
                   texto: 'Salir',
                   activo: false,
-                  onTap: () => supabase.auth.signOut(),
+                  onTap: () => cerrarSesion(context),
                 ),
               ],
             ),

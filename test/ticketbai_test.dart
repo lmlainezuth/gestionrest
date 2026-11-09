@@ -32,9 +32,25 @@ void main() {
   });
 
   test('Desglose de IVA del 10 % con precios IVA incluido', () {
-    final d = Desglose.de(const [LineaFactura('x', 1, 78.40)], 10);
+    final d = Desglose.de(const [LineaFactura('x', 1, 78.40)]);
     expect(d.base, 71.27);
     expect(d.cuota, 7.13);
     expect(d.total, 78.40);
+  });
+
+  test('Desglose con varios tipos de IVA (10 % en local, 21 % para llevar)', () {
+    final d = Desglose.de(const [
+      LineaFactura('Café', 2, 1.80, 10),
+      LineaFactura('Lata refresco para llevar', 1, 2.42, 21),
+    ]);
+    expect(d.tramos.length, 2);
+    expect(d.tramos[0].tipo, 10);
+    expect(d.tramos[0].base, 3.27);
+    expect(d.tramos[0].cuota, 0.33);
+    expect(d.tramos[1].tipo, 21);
+    expect(d.tramos[1].base, 2.00);
+    expect(d.tramos[1].cuota, 0.42);
+    expect(d.total, 6.02);
+    expect(d.tipoIva, 10);
   });
 }

@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../../core/red.dart';
+import '../../core/aviso_sin_conexion.dart';
+import '../../core/conexion.dart';
 import '../../core/panel_lateral.dart';
 
 import '../../core/tema.dart';
@@ -99,7 +102,15 @@ class _CartaPageState extends State<CartaPage> {
   @override
   Widget build(BuildContext context) {
     if (_cargando) return const Center(child: CircularProgressIndicator());
-    if (_error != null) return Center(child: Text('Error al cargar la carta:\n$_error'));
+    if (_error != null) {
+      return AvisoSinConexion(textoError(_error), onReintentar: () {
+        setState(() {
+          _error = null;
+          _cargando = true;
+        });
+        _cargarTodo();
+      });
+    }
 
     final grupo = _grupos.where((g) => g['id'] == _grupoId).firstOrNull;
     final tema = Theme.of(context);

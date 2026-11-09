@@ -26,7 +26,6 @@ class TbaiXml {
     String dos(int v) => v.toString().padLeft(2, '0');
     String f(DateTime d) => '${dos(d.day)}-${dos(d.month)}-${d.year}';
     String h(DateTime d) => '${dos(d.hour)}:${dos(d.minute)}:${dos(d.second)}';
-    final iva = 1 + desglose.tipoIva / 100;
 
     final b = StringBuffer()
       ..write('<?xml version="1.0" encoding="UTF-8"?>')
@@ -78,7 +77,7 @@ class TbaiXml {
         ..write('<IDDetalleFactura>')
         ..write('<DescripcionDetalle>${_e(l.descripcion)}</DescripcionDetalle>')
         ..write('<Cantidad>${n2(l.cantidad)}</Cantidad>')
-        ..write('<ImporteUnitario>${n2(l.precioUnitario / iva)}</ImporteUnitario>')
+        ..write('<ImporteUnitario>${n2(l.precioUnitario / (1 + l.tipoIva / 100))}</ImporteUnitario>')
         ..write('<Descuento>0.00</Descuento>')
         ..write('<ImporteTotal>${n2(l.total)}</ImporteTotal>')
         ..write('</IDDetalleFactura>');
@@ -89,11 +88,17 @@ class TbaiXml {
       ..write('<Claves><IDClave><ClaveRegimenIvaOpTrascendencia>01</ClaveRegimenIvaOpTrascendencia></IDClave></Claves>')
       ..write('</DatosFactura>')
       ..write('<TipoDesglose><DesgloseFactura><Sujeta><NoExenta><DetalleNoExenta>')
-      ..write('<TipoNoExenta>S1</TipoNoExenta><DesgloseIVA><DetalleIVA>')
-      ..write('<BaseImponible>${n2(desglose.base)}</BaseImponible>')
-      ..write('<TipoImpositivo>${n2(desglose.tipoIva)}</TipoImpositivo>')
-      ..write('<CuotaImpuesto>${n2(desglose.cuota)}</CuotaImpuesto>')
-      ..write('</DetalleIVA></DesgloseIVA></DetalleNoExenta></NoExenta></Sujeta></DesgloseFactura></TipoDesglose>')
+      ..write('<TipoNoExenta>S1</TipoNoExenta><DesgloseIVA>');
+    for (final t in desglose.tramos) {
+      b
+        ..write('<DetalleIVA>')
+        ..write('<BaseImponible>${n2(t.base)}</BaseImponible>')
+        ..write('<TipoImpositivo>${n2(t.tipo)}</TipoImpositivo>')
+        ..write('<CuotaImpuesto>${n2(t.cuota)}</CuotaImpuesto>')
+        ..write('</DetalleIVA>');
+    }
+    b
+      ..write('</DesgloseIVA></DetalleNoExenta></NoExenta></Sujeta></DesgloseFactura></TipoDesglose>')
       ..write('</Factura><HuellaTBAI>');
     if (anterior != null) {
       b
@@ -141,9 +146,12 @@ class TbaiXml {
         '</T:AnulaTicketBai>';
   }
 
+  /// Escapa el texto tal como lo deja la canonicalización C14N (sin escapar comillas y sin
+  /// caracteres de control): así el XML generado ya es su forma canónica y se puede firmar
+  /// también en el propio equipo, sin internet.
   static String _e(String s) => s
+      .replaceAll(RegExp(r'[\x00-\x1F\x7F]'), ' ')
       .replaceAll('&', '&amp;')
       .replaceAll('<', '&lt;')
-      .replaceAll('>', '&gt;')
-      .replaceAll('"', '&quot;');
+      .replaceAll('>', '&gt;');
 }

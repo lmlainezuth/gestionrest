@@ -38,9 +38,10 @@ class _CobroDialogState extends State<CobroDialog> {
   late final List<LineaFactura> _lineas = [
     for (final d in ((widget.pedido['pedido_detalle'] as List?) ?? []).cast<Map<String, dynamic>>())
       if (d['estado_cocina'] != 'anulado')
-        LineaFactura(d['descripcion'] as String, (d['cantidad'] as num).toDouble(), (d['precio_unitario'] as num).toDouble()),
+        LineaFactura(d['descripcion'] as String, (d['cantidad'] as num).toDouble(), (d['precio_unitario'] as num).toDouble(),
+            ((d['tipo_iva'] as num?) ?? 10).toDouble()),
   ];
-  late final double _total = Desglose.de(_lineas, 10).total;
+  late final double _total = Desglose.de(_lineas).total;
 
   double get _pagado => _pagos.fold(0.0, (s, p) => s + p.importe);
   double get _restante => ((_total - _pagado) * 100).roundToDouble() / 100;

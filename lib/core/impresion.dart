@@ -3,7 +3,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../features/ticketbai/modelos.dart' show LineaFactura, euros;
+import '../features/ticketbai/modelos.dart' show Desglose, LineaFactura, euros;
 import 'escpos.dart';
 
 /// Impresión de tickets: directa por red (ESC/POS) o en PDF por la impresora del sistema.
@@ -88,14 +88,19 @@ class Impresion {
       for (final l in lineasF) {
         t.fila('${l.cantidad.toStringAsFixed(0)} ${l.descripcion}', _importe(l.total));
       }
+      t.raya();
+      for (final tr in Desglose.deFactura(f)) {
+        t
+          ..fila('Base ${tr.tipo.toStringAsFixed(0)} %', euros(tr.base))
+          ..fila('IVA ${tr.tipo.toStringAsFixed(0)} %', euros(tr.cuota));
+      }
       t
+        ..fila('TOTAL (IVA incl.)', euros(f['importe_total'] as num), fuerte: true, alto: true)
         ..raya()
-        ..fila('Base imponible', euros(f['base_imponible'] as num))
-        ..fila('IVA ${(f['tipo_iva'] as num).toStringAsFixed(0)} %', euros(f['cuota_iva'] as num))
-        ..fila('TOTAL', euros(f['importe_total'] as num), fuerte: true, alto: true)
-        ..raya()
+        // Anexo V: código en una línea y debajo el QR, de 30 a 40 mm (módulo 6 a 203 ppp ≈ 31-34 mm)
         ..linea('${f['tbai_id']}', centro: true)
-        ..qr(f['qr_url'] as String, modulo: r.ancho == 58 ? 4 : 6);
+        ..qr(f['qr_url'] as String, modulo: 6);
+      if (f['estado_envio'] == 'pendiente') t.linea('QR operativo cuando se complete el envio', centro: true);
       if (f['estado_envio'] == 'simulada') t.linea('MODO SIMULADO - NO VALIDA FISCALMENTE', centro: true, fuerte: true);
       t
         ..raya()
@@ -128,9 +133,11 @@ class Impresion {
           _raya(),
           for (final l in lineas) _fila('${l.cantidad.toStringAsFixed(0)} ${l.descripcion}', _importe(l.total), s),
           _raya(),
-          _fila('Base imponible', euros(f['base_imponible'] as num), s),
-          _fila('IVA ${(f['tipo_iva'] as num).toStringAsFixed(0)} %', euros(f['cuota_iva'] as num), s),
-          _fila('TOTAL', euros(f['importe_total'] as num), b.copyWith(fontSize: 11)),
+          for (final tr in Desglose.deFactura(f)) ...[
+            _fila('Base ${tr.tipo.toStringAsFixed(0)} %', euros(tr.base), s),
+            _fila('IVA ${tr.tipo.toStringAsFixed(0)} %', euros(tr.cuota), s),
+          ],
+          _fila('TOTAL (IVA incl.)', euros(f['importe_total'] as num), b.copyWith(fontSize: 11)),
           _raya(),
           pw.Text('${f['tbai_id']}', textAlign: pw.TextAlign.center, style: s.copyWith(fontSize: 7)),
           pw.SizedBox(height: 4),

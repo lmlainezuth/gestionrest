@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../../core/conexion.dart';
+import '../../core/red.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
+import '../barra/barra_page.dart';
+import '../barra/venta_offline.dart';
 import '../comanda/comanda_page.dart';
 import '../ticketbai/modelos.dart' show euros;
 
@@ -18,8 +22,55 @@ class _MesasViewState extends State<MesasView> {
   String? _salonId;
   Map<String, Map<String, dynamic>> _abiertos = {};
   List<Map<String, dynamic>> _llevar = [];
+  bool _sinConexion = false;
+
+  @override
+  void initState() {
+    super.initState();
+    Conexion.enLinea.addListener(_alCambiarConexion);
+  }
+
+  @override
+  void dispose() {
+    Conexion.enLinea.removeListener(_alCambiarConexion);
+    super.dispose();
+  }
+
+  void _alCambiarConexion() {
+    if (!mounted) return;
+    if (Conexion.enLinea.value == _sinConexion) _recargar();
+  }
 
   Future<List<Map<String, dynamic>>> _cargar() async {
+    try {
+      final r = await online(_cargarServidor);
+      _sinConexion = false;
+      return r;
+    } catch (e) {
+      if (!esErrorDeRed(e)) rethrow;
+      // Sin internet: plano y cuentas de la copia del equipo + lo apuntado aquí
+      final salones = await VentaOffline.leerSalones();
+      if (salones == null) rethrow;
+      final abiertas = await VentaOffline.abiertas();
+      _abiertos = {
+        for (final p in abiertas)
+          if (p['mesa_id'] != null) p['mesa_id'] as String: p,
+      };
+      _llevar = [];
+      for (final s in salones) {
+        for (final m in (s['mesas'] as List).cast<Map<String, dynamic>>()) {
+          final ocupada = _abiertos.containsKey(m['id']);
+          if (ocupada && m['disponibilidad'] == 'libre') m['disponibilidad'] = 'ocupada';
+          if (!ocupada && m['disponibilidad'] != 'reservada') m['disponibilidad'] = 'libre';
+        }
+      }
+      _sinConexion = true;
+      return salones;
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _cargarServidor() async {
+    exigirConexion(); // sin conexión, mesas en modo "este equipo" (no la copia de lectura)
     final filas = await supabase
         .from('salones')
         .select('id, nombre, mesas(id, nombre, capacidad, disponibilidad, activo)')
@@ -34,10 +85,19 @@ class _MesasViewState extends State<MesasView> {
         if (p['mesa_id'] != null) p['mesa_id'] as String: p,
     };
     _llevar = [for (final p in pedidos) if (p['tipo'] == 'llevar') p];
+    VentaOffline.refrescarCopia().catchError((_) {}); // por si se va internet
     return List<Map<String, dynamic>>.from(filas);
   }
 
+  bool _avisarSinConexion() {
+    if (!_sinConexion) return false;
+    ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Sin internet: los pedidos para llevar se hacen desde Barra (cuenta con nombre)')));
+    return true;
+  }
+
   Future<void> _nuevoLlevar() async {
+    if (_avisarSinConexion()) return;
     final ctrl = TextEditingController();
     final nombre = await showDialog<String>(
       context: context,
@@ -68,6 +128,7 @@ class _MesasViewState extends State<MesasView> {
   }
 
   Future<void> _abrirLlevar(Map<String, dynamic> p) async {
+    if (_avisarSinConexion()) return;
     final cambio = await Navigator.push<bool>(
       context,
       MaterialPageRoute(builder: (_) => ComandaPage(pedidoId: p['id'] as String)),
@@ -78,7 +139,10 @@ class _MesasViewState extends State<MesasView> {
   Future<void> _abrir(Map<String, dynamic> mesa, String zona) async {
     final cambio = await Navigator.push<bool>(
       context,
-      MaterialPageRoute(builder: (_) => ComandaPage(mesa: mesa, zona: zona)),
+      MaterialPageRoute(
+        // Sin internet la mesa se atiende y se cobra en este equipo
+        builder: (_) => _sinConexion ? BarraPage(mesa: mesa, zona: zona) : ComandaPage(mesa: mesa, zona: zona),
+      ),
     );
     if (cambio == true) await _recargar();
   }
@@ -99,7 +163,22 @@ class _MesasViewState extends State<MesasView> {
           return const Center(child: CircularProgressIndicator());
         }
         if (snap.hasError) {
-          return Center(child: Text('Error al cargar mesas:\n${snap.error}'));
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Text(
+                  esErrorDeRed(snap.error!)
+                      ? 'Sin internet y este equipo todavía no tiene copia de las mesas.\n'
+                          'Ábrelas una vez con conexión; mientras tanto puedes cobrar en Barra.'
+                      : 'Error al cargar mesas:\n${snap.error}',
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 12),
+                OutlinedButton(onPressed: _recargar, child: const Text('Reintentar')),
+              ]),
+            ),
+          );
         }
         final salones = snap.data!;
         if (salones.isEmpty) {
@@ -117,6 +196,20 @@ class _MesasViewState extends State<MesasView> {
           child: ListView(
             padding: const EdgeInsets.all(28),
             children: [
+              if (_sinConexion)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 16),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(color: const Color(0xFFFDF0DC), borderRadius: BorderRadius.circular(12)),
+                  child: const Row(children: [
+                    Icon(Icons.wifi_off, color: Color(0xFFB45309)),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Text('Sin internet: las mesas se atienden y se cobran en este equipo. '
+                          'Las comandas salen por la impresora de cocina; todo se sube solo al volver la conexión.'),
+                    ),
+                  ]),
+                ),
               // Zonas
               Wrap(
                 spacing: 10,

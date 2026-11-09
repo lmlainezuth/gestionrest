@@ -225,6 +225,7 @@ Future<bool> dividirCuenta(BuildContext context, Map<String, dynamic> pedido) as
         'descripcion': l['descripcion'],
         'cantidad': k,
         'precio_unitario': l['precio_unitario'],
+        if (l['tipo_iva'] != null) 'tipo_iva': l['tipo_iva'],
         'nota': l['nota'],
         'curso': l['curso'] ?? '1',
         'estado_cocina': l['estado_cocina'],
@@ -237,7 +238,7 @@ Future<bool> dividirCuenta(BuildContext context, Map<String, dynamic> pedido) as
 
   final parte = await supabase
       .from('pedidos')
-      .select('id, total, pedido_detalle(id, descripcion, cantidad, precio_unitario, estado_cocina)')
+      .select('id, total, pedido_detalle(id, descripcion, cantidad, precio_unitario, tipo_iva, estado_cocina)')
       .eq('id', nuevo['id'])
       .single();
   if (!context.mounted) return false;

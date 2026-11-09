@@ -37,6 +37,7 @@ class _ProductoDialogState extends State<ProductoDialog> {
       (widget.areas.isEmpty ? null : widget.areas.first['id'] as String);
   late final Set<String> _alergenos = {...((p?['alergenos'] as List?) ?? []).cast<String>()};
   late bool _activo = (p?['activo'] as bool?) ?? true;
+  late double _iva = ((p?['tipo_iva'] as num?) ?? 10).toDouble();
   String? _error;
   bool _guardando = false;
   late String? _imagen = p?['imagen_url'] as String?;
@@ -104,6 +105,7 @@ class _ProductoDialogState extends State<ProductoDialog> {
       'precio_compra': leerImporte(_compra.text) ?? 0,
       'alergenos': _alergenos.toList(),
       'activo': _activo,
+      'tipo_iva': _iva,
       'imagen_url': _imagen,
     };
     try {
@@ -266,6 +268,17 @@ class _ProductoDialogState extends State<ProductoDialog> {
                         }),
                       ),
                   ],
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<double>(
+                  initialValue: _iva,
+                  decoration: const InputDecoration(labelText: 'IVA', border: OutlineInputBorder()),
+                  items: const [
+                    DropdownMenuItem(value: 10, child: Text('10 % · se consume en el bar (lo normal)')),
+                    DropdownMenuItem(value: 21, child: Text('21 % · para llevar: alcohol, refrescos azucarados, tabaco')),
+                    DropdownMenuItem(value: 4, child: Text('4 % · para llevar: pan, leche')),
+                  ],
+                  onChanged: (v) => setState(() => _iva = v ?? 10),
                 ),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,

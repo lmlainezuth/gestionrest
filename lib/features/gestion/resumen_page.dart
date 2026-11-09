@@ -6,6 +6,9 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
+import '../../core/aviso_sin_conexion.dart';
+import '../../core/conexion.dart';
+import '../../core/red.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
 import '../ticketbai/modelos.dart' show euros;
@@ -155,7 +158,24 @@ class _ResumenPageState extends State<ResumenPage> {
         _Vista.fechas => '${fechaCorta(iso(_fechas!.start))}/${_fechas!.start.year} – ${fechaCorta(iso(_fechas!.end))}/${_fechas!.end.year}',
       };
 
+  String? _errorCarga;
+
+  /// Carga sin quedarse colgada: sin internet enseña el aviso y se reintenta sola.
   Future<void> _cargar() async {
+    try {
+      await online(_cargarDatos);
+      if (_errorCarga != null && mounted) setState(() => _errorCarga = null);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorCarga = textoError(e);
+          _cargando = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _cargarDatos() async {
     setState(() => _cargando = true);
     final (d, h) = _rango;
     final (da, ha) = _rangoAnt;
@@ -356,6 +376,7 @@ class _ResumenPageState extends State<ResumenPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (_errorCarga != null) return AvisoSinConexion(_errorCarga!, onReintentar: _cargar);
     if (_cargando) {
       return Column(children: [
         Padding(padding: const EdgeInsets.all(28), child: _cabecera()),

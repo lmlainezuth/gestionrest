@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../../core/aviso_sin_conexion.dart';
+import '../../core/conexion.dart';
+import '../../core/red.dart';
 import '../../core/panel_lateral.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
@@ -23,7 +26,24 @@ class _ClientesTabState extends State<ClientesTab> {
     _cargar();
   }
 
+  String? _errorCarga;
+
+  /// Carga sin quedarse colgada: sin internet enseña el aviso y se reintenta sola.
   Future<void> _cargar() async {
+    try {
+      await online(_cargarDatos);
+      if (_errorCarga != null && mounted) setState(() => _errorCarga = null);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorCarga = textoError(e);
+          _cargando = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _cargarDatos() async {
     _clientes = List<Map<String, dynamic>>.from(await supabase.from('clientes').select().eq('activo', true).order('nombre'));
     if (mounted) setState(() => _cargando = false);
   }
@@ -35,6 +55,7 @@ class _ClientesTabState extends State<ClientesTab> {
 
   @override
   Widget build(BuildContext context) {
+    if (_errorCarga != null) return AvisoSinConexion(_errorCarga!, onReintentar: _cargar);
     if (_cargando) return const Center(child: CircularProgressIndicator());
     final t = _buscar.toLowerCase();
     final lista = _clientes
@@ -88,7 +109,7 @@ Future<Map<String, dynamic>?> editarCliente(BuildContext context, [Map<String, d
         ? await supabase.from('clientes').insert(datos).select().single()
         : await supabase.from('clientes').update(datos).eq('id', c['id']).select().single();
   } catch (e) {
-    if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(textoError(e))));
     return null;
   }
 }

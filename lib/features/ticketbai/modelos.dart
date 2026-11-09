@@ -3,8 +3,9 @@ class LineaFactura {
   final String descripcion;
   final double cantidad;
   final double precioUnitario;
+  final double tipoIva; // 10 hostelería; 21 / 4 en ventas para llevar
 
-  const LineaFactura(this.descripcion, this.cantidad, this.precioUnitario);
+  const LineaFactura(this.descripcion, this.cantidad, this.precioUnitario, [this.tipoIva = 10]);
 
   double get total => _r2(cantidad * precioUnitario);
 
@@ -13,28 +14,77 @@ class LineaFactura {
         'cantidad': cantidad,
         'precio_unitario': precioUnitario,
         'total': total,
+        'tipo_iva': tipoIva,
       };
 
   factory LineaFactura.fromMap(Map<String, dynamic> m) => LineaFactura(
         m['descripcion'] as String,
         (m['cantidad'] as num).toDouble(),
         (m['precio_unitario'] as num).toDouble(),
+        ((m['tipo_iva'] as num?) ?? 10).toDouble(),
       );
 }
 
-/// Desglose de IVA a partir de precios con IVA incluido.
+/// Tramo del desglose: base y cuota de un tipo de IVA.
+class TramoIva {
+  final double tipo;
+  final double base;
+  final double cuota;
+  const TramoIva(this.tipo, this.base, this.cuota);
+  double get total => _r2(base + cuota);
+  Map<String, dynamic> toMap() => {'tipo': tipo, 'base': base, 'cuota': cuota};
+}
+
+/// Desglose de IVA (uno o varios tipos) a partir de precios con IVA incluido.
 class Desglose {
   final double total;
   final double base;
   final double cuota;
-  final double tipoIva;
+  final List<TramoIva> tramos; // ordenados de menor a mayor tipo
 
-  Desglose._(this.total, this.base, this.cuota, this.tipoIva);
+  Desglose._(this.total, this.base, this.cuota, this.tramos);
 
-  factory Desglose.de(List<LineaFactura> lineas, double tipoIva) {
-    final total = _r2(lineas.fold(0.0, (s, l) => s + l.total));
-    final base = _r2(total / (1 + tipoIva / 100));
-    return Desglose._(total, base, _r2(total - base), tipoIva);
+  /// Tipo principal (el de mayor importe): se guarda en facturas.tipo_iva.
+  double get tipoIva => tramos.isEmpty
+      ? 10
+      : tramos.reduce((a, b) => a.total.abs() >= b.total.abs() ? a : b).tipo;
+
+  factory Desglose.de(List<LineaFactura> lineas) {
+    final porTipo = <double, double>{};
+    for (final l in lineas) {
+      porTipo[l.tipoIva] = (porTipo[l.tipoIva] ?? 0) + l.total;
+    }
+    final tipos = porTipo.keys.toList()..sort();
+    final tramos = [
+      for (final t in tipos)
+        () {
+          final tot = _r2(porTipo[t]!);
+          final base = _r2(tot / (1 + t / 100));
+          return TramoIva(t, base, _r2(tot - base));
+        }(),
+    ];
+    final total = _r2(tramos.fold(0.0, (s, t) => s + t.total));
+    return Desglose._(
+      total,
+      _r2(tramos.fold(0.0, (s, t) => s + t.base)),
+      _r2(tramos.fold(0.0, (s, t) => s + t.cuota)),
+      tramos,
+    );
+  }
+
+  /// Desglose guardado en una factura (facturas.desglose_iva o, si es antigua, sus columnas).
+  static List<TramoIva> deFactura(Map<String, dynamic> f) {
+    final d = f['desglose_iva'] as List?;
+    if (d == null || d.isEmpty) {
+      return [
+        TramoIva((f['tipo_iva'] as num).toDouble(), (f['base_imponible'] as num).toDouble(),
+            (f['cuota_iva'] as num).toDouble()),
+      ];
+    }
+    return [
+      for (final m in d.cast<Map>())
+        TramoIva((m['tipo'] as num).toDouble(), (m['base'] as num).toDouble(), (m['cuota'] as num).toDouble()),
+    ];
   }
 }
 

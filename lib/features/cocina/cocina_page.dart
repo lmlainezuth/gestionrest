@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/tema.dart';
@@ -15,6 +17,8 @@ const _texto = Color(0xFFF3F1EC);
 const _apagado = Color(0xFFB5B0A5);
 const _amarillo = Color(0xFFE8B53A);
 const _menta = Color(0xFF7FD1BE);
+
+const _kCopia = 'offline_cocina';
 
 const _cursos = {'ya': 'Ya', '1': '1.º', '2': '2.º', 'postre': 'Postre'};
 
@@ -44,8 +48,21 @@ class _CocinaPageState extends State<CocinaPage> {
   }
 
   Future<void> _iniciar() async {
-    final areas = await supabase.from('areas_preparacion').select('id, nombre');
-    _areas = {for (final a in areas) a['id'] as String: a['nombre'] as String};
+    // Primero lo guardado en el equipo (la pantalla aparece al instante), luego lo del servidor
+    try {
+      final p = await SharedPreferences.getInstance();
+      final a = p.getString('${_kCopia}_areas'), c = p.getString(_kCopia);
+      if (a != null) _areas = Map<String, String>.from(jsonDecode(a) as Map);
+      if (c != null) _lineas = [for (final l in jsonDecode(c) as List) Map<String, dynamic>.from(l as Map)];
+      if (c != null && mounted) setState(() => _cargando = false);
+    } catch (_) {}
+    try {
+      final areas = await supabase.from('areas_preparacion').select('id, nombre');
+      _areas = {for (final a in areas) a['id'] as String: a['nombre'] as String};
+      SharedPreferences.getInstance().then((p) => p.setString('${_kCopia}_areas', jsonEncode(_areas))).ignore();
+    } catch (_) {
+      // Sin internet: se queda con las zonas guardadas
+    }
     await _cargar();
     _canal = supabase
         .channel('cocina')
@@ -82,8 +99,18 @@ class _CocinaPageState extends State<CocinaPage> {
           .order('creado_en');
       _lineas = List<Map<String, dynamic>>.from(filas);
       _error = null;
+      // Copia para seguir viendo las comandas si se va internet
+      SharedPreferences.getInstance().then((p) => p.setString(_kCopia, jsonEncode(_lineas))).ignore();
     } catch (e) {
       _error = '$e';
+      if (_lineas.isEmpty) {
+        try {
+          final copia = (await SharedPreferences.getInstance()).getString(_kCopia);
+          if (copia != null) {
+            _lineas = [for (final l in jsonDecode(copia) as List) Map<String, dynamic>.from(l as Map)];
+          }
+        } catch (_) {}
+      }
     }
     if (mounted) setState(() => _cargando = false);
   }
@@ -169,7 +196,8 @@ class _CocinaPageState extends State<CocinaPage> {
                 if (_error != null)
                   const Padding(
                     padding: EdgeInsets.only(right: 16),
-                    child: Text('Sin conexión, reintentando…', style: TextStyle(color: _amarillo)),
+                    child: Text('Sin internet: comandas de la última vez. Lo nuevo sale por la impresora de cocina',
+                        style: TextStyle(color: _amarillo)),
                   ),
                 Text('${ahora.hour.toString().padLeft(2, '0')}:${ahora.minute.toString().padLeft(2, '0')}',
                     style: titulo(28, color: _texto)),

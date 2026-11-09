@@ -61,3 +61,6 @@ flutter_01.png
 
 # Local Netlify folder
 .netlify
+
+# Salida de los tests de firma
+test/salida/

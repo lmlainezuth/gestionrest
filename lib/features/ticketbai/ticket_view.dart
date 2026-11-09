@@ -51,10 +51,11 @@ class TicketView extends StatelessWidget {
             fila('${l.cantidad.toStringAsFixed(0)} ${l.descripcion}',
                 l.total.toStringAsFixed(2).replaceAll('.', ',')),
           linea,
-          fila('Base imponible', euros(factura['base_imponible'] as num)),
-          fila('IVA ${(factura['tipo_iva'] as num).toStringAsFixed(0)} %',
-              euros(factura['cuota_iva'] as num)),
-          fila('TOTAL', euros(factura['importe_total'] as num), negrita.copyWith(fontSize: 15)),
+          for (final tr in Desglose.deFactura(factura)) ...[
+            fila('Base ${tr.tipo.toStringAsFixed(0)} %', euros(tr.base)),
+            fila('IVA ${tr.tipo.toStringAsFixed(0)} %', euros(tr.cuota)),
+          ],
+          fila('TOTAL (IVA incl.)', euros(factura['importe_total'] as num), negrita.copyWith(fontSize: 15)),
           linea,
           // Anexo V: código TicketBAI en una línea y debajo el QR (nivel M)
           FittedBox(child: Text(factura['tbai_id'] as String, style: mono)),

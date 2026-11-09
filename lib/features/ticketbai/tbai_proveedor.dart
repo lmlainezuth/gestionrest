@@ -9,7 +9,9 @@ import 'package:http/http.dart' as http;
 import '../../core/certificado_equipo.dart';
 import '../../core/config.dart';
 import '../../core/envio_tbai.dart' if (dart.library.io) '../../core/envio_tbai_io.dart';
+import '../../core/firma_equipo.dart' if (dart.library.io) '../../core/firma_equipo_io.dart';
 import '../../main.dart';
+import 'firma_xades.dart';
 
 class FirmaResultado {
   final String xmlFirmado;
@@ -96,6 +98,9 @@ class ProveedorGipuzkoa implements TicketBaiProveedor {
 
   @override
   Future<FirmaResultado> firmar(String xml) async {
+    // Con certificado instalado en este equipo se firma aquí mismo (sirve sin internet)
+    final local = await firmarEnEquipo(xml);
+    if (local != null) return local;
     final r = await _llamar({'accion': 'firmar', 'xml': xml});
     return FirmaResultado(r['xmlFirmado'] as String, r['signatureValue'] as String);
   }
@@ -153,6 +158,21 @@ class ProveedorGipuzkoa implements TicketBaiProveedor {
       return EnvioResultado('pendiente', jsonEncode({'descripcion': 'No enviada todavía: $e'}));
     }
   }
+}
+
+/// Firma en este equipo si tiene el certificado instalado (Android o Windows). Devuelve null
+/// si no lo tiene (entonces firma el servidor).
+Future<FirmaResultado?> firmarEnEquipo(String xml) async {
+  if (kIsWeb || !FirmaEquipo.soportada) return null;
+  final cert = await CertificadoEquipo.leer();
+  if (cert == null) return null;
+  final c = await FirmaEquipo.certificado(cert.bytes, cert.clave);
+  if (c.caduca.isBefore(DateTime.now())) {
+    throw StateError('El certificado de este equipo caducó el ${c.caduca.toLocal().toString().substring(0, 10)}: renuévalo');
+  }
+  final r = await FirmaXades.firmar(xml,
+      certificadoBase64: c.der, firmarRsa: (datos) => FirmaEquipo.firmar(cert.bytes, cert.clave, datos));
+  return FirmaResultado(r.xml, r.signatureValue);
 }
 
 /// Comprueba el certificado configurado en el servidor.

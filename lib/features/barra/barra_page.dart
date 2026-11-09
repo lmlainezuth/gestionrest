@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
+import '../../core/conexion.dart';
+import '../../core/red.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
 import '../../core/impresion.dart';
@@ -10,6 +13,8 @@ import '../comanda/comanda_page.dart' show BotonProducto, ChipGrupo;
 import '../comanda/modificadores_picker.dart';
 import '../ticketbai/modelos.dart' show euros;
 import '../ticketbai/ticket_view.dart';
+import '../ticketbai/envios_pendientes.dart';
+import 'venta_offline.dart';
 
 class _Linea {
   _Linea(this.producto, [this.mods = const []]);
@@ -24,7 +29,11 @@ class _Linea {
 /// Venta rápida en barra: sin mesas. Se cobra al momento o se deja
 /// en una cuenta con nombre para los habituales.
 class BarraPage extends StatefulWidget {
-  const BarraPage({super.key});
+  const BarraPage({super.key, this.mesa, this.zona});
+
+  /// Sin internet, las mesas se atienden con esta misma pantalla ("modo mesa").
+  final Map<String, dynamic>? mesa;
+  final String? zona;
 
   @override
   State<BarraPage> createState() => _BarraPageState();
@@ -34,6 +43,7 @@ class _BarraPageState extends State<BarraPage> {
   bool _cargando = true;
   String? _error;
   bool _ocupado = false;
+  bool _sinConexion = false; // carta cargada de la copia del equipo
 
   List<Map<String, dynamic>> _grupos = [];
   List<Map<String, dynamic>> _productos = [];
@@ -47,14 +57,34 @@ class _BarraPageState extends State<BarraPage> {
   @override
   void initState() {
     super.initState();
+    Conexion.enLinea.addListener(_alCambiarConexion);
     _cargar();
+  }
+
+  @override
+  void dispose() {
+    Conexion.enLinea.removeListener(_alCambiarConexion);
+    super.dispose();
+  }
+
+  /// Se va internet: se cobra en el equipo al momento. Vuelve: se recarga todo solo.
+  void _alCambiarConexion() {
+    if (!mounted) return;
+    if (Conexion.enLinea.value) {
+      if (_sinConexion && !_ocupado) _cargar();
+    } else if (!_sinConexion) {
+      setState(() => _sinConexion = true);
+    }
   }
 
   Future<void> _cargar() async {
     try {
+      // En modo mesa (solo se abre sin internet) se trabaja con la copia del equipo
+      if (_modoMesa) throw http.ClientException('Modo mesa sin conexión (SocketException)');
+      exigirConexion();
       final r = await Future.wait([
         supabase.from('grupos_productos').select('id, nombre, color').eq('activo', true).order('orden').order('nombre'),
-        supabase.from('productos').select('id, grupo_id, area_id, nombre, precio_venta, alergenos, imagen_url, producto_modificadores(modificadores(id, nombre, precio, activo))').eq('activo', true).order('nombre'),
+        supabase.from('productos').select('id, grupo_id, area_id, nombre, precio_venta, tipo_iva, alergenos, imagen_url, producto_modificadores(modificadores(id, nombre, precio, activo))').eq('activo', true).order('nombre'),
         supabase.from('areas_preparacion').select('id, nombre'),
       ]);
       _grupos = List<Map<String, dynamic>>.from(r[0]);
@@ -63,21 +93,56 @@ class _BarraPageState extends State<BarraPage> {
       _grupoId ??= _grupos.isEmpty ? null : _grupos.first['id'] as String;
       await _cargarCuentas();
       _error = null;
+      _sinConexion = false;
+      // Copia para poder vender si se cae internet
+      VentaOffline.guardarCarta(_grupos, _productos, _areas).ignore();
+      VentaOffline.guardarContexto().catchError((_) {});
     } catch (e) {
-      _error = '$e';
+      final copia = esErrorDeRed(e) ? await VentaOffline.leerCarta() : null;
+      if (copia != null) {
+        _grupos = copia.grupos;
+        _productos = copia.productos;
+        _areas = copia.areas;
+        _grupoId ??= _grupos.isEmpty ? null : _grupos.first['id'] as String;
+        _sinConexion = true;
+        await _cargarCuentas();
+        _error = null;
+      } else {
+        _error = '$e';
+      }
     }
     if (mounted) setState(() => _cargando = false);
   }
 
+  bool get _modoMesa => widget.mesa != null;
+
   Future<void> _cargarCuentas() async {
+    if (_modoMesa) {
+      // La mesa: su pedido abierto (copia + lo apuntado en este equipo) o uno nuevo
+      final abiertas = await VentaOffline.abiertas();
+      _cuenta = abiertas.where((p) => p['mesa_id'] == widget.mesa!['id']).firstOrNull ??
+          (_cuenta?['mesa_id'] == widget.mesa!['id'] ? _cuenta : null) ??
+          VentaOffline.nuevoPedido(mesaId: widget.mesa!['id'] as String);
+      _cuentas = [];
+      return;
+    }
+    if (_sinConexion || !Conexion.enLinea.value) {
+      _cuentas = [
+        for (final p in await VentaOffline.abiertas())
+          if (p['tipo'] == 'barra' && p['nombre_llevar'] != null) p,
+      ];
+      if (_cuenta != null) _cuenta = _cuentas.where((c) => c['id'] == _cuenta!['id']).firstOrNull;
+      return;
+    }
     _cuentas = List<Map<String, dynamic>>.from(await supabase
         .from('pedidos')
         .select('id, nombre_llevar, total, creado_en, estado, '
-            'pedido_detalle(id, descripcion, cantidad, precio_unitario, estado_cocina)')
+            'pedido_detalle(id, descripcion, cantidad, precio_unitario, tipo_iva, estado_cocina)')
         .eq('tipo', 'barra')
         .inFilter('estado', ['abierto', 'precuenta'])
         .not('nombre_llevar', 'is', null)
         .order('creado_en'));
+    VentaOffline.guardarAbiertas([for (final c in _cuentas) {...c, 'tipo': 'barra'}], barra: true).ignore();
     if (_cuenta != null) {
       _cuenta = _cuentas.where((c) => c['id'] == _cuenta!['id']).firstOrNull;
     }
@@ -145,13 +210,27 @@ class _BarraPageState extends State<BarraPage> {
 
   Future<void> _cobrar() async {
     if (_ronda.isEmpty && _cuenta == null) return;
+    if (_sinConexion || !Conexion.enLinea.value) return _cobrarSinConexion();
     setState(() => _ocupado = true);
     final eraNueva = _cuenta == null;
     try {
-      final id = await _guardarRonda();
+      final String id;
+      try {
+        id = await _guardarRonda();
+      } catch (e) {
+        // Se ha caído internet: venta rápida firmada en el equipo
+        if (esErrorDeRed(e)) {
+          setState(() {
+            _ocupado = false;
+            _sinConexion = true;
+          });
+          return await _cobrarSinConexion();
+        }
+        rethrow;
+      }
       final pedido = await supabase
           .from('pedidos')
-          .select('id, total, pedido_detalle(id, descripcion, cantidad, precio_unitario, estado_cocina)')
+          .select('id, total, pedido_detalle(id, descripcion, cantidad, precio_unitario, tipo_iva, estado_cocina)')
           .eq('id', id)
           .single();
       if (!mounted) return;
@@ -175,8 +254,111 @@ class _BarraPageState extends State<BarraPage> {
     if (mounted) setState(() => _ocupado = false);
   }
 
+  /// Venta rápida sin internet: un solo pago, solo ticket (sin NIF). Se firma en el equipo,
+  /// se imprime y se guarda; al volver la conexión se sube y se envía a Hacienda sola.
+  Future<void> _cobrarSinConexion() async {
+    if (_ronda.isEmpty && _totalCuenta <= 0) return;
+    final motivo = await VentaOffline.motivoNoDisponible();
+    if (motivo != null) {
+      _avisar('Sin internet no se puede cobrar: $motivo');
+      return;
+    }
+    if (!mounted) return;
+    final total = ((_totalCuenta + _totalRonda) * 100).roundToDouble() / 100;
+    final pago = await showDialog<({String metodo, double? entregado})>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _CobroSinConexion(total: total),
+    );
+    if (pago == null || !mounted) return;
+    setState(() => _ocupado = true);
+    try {
+      final factura = await VentaOffline.vender(
+        pedido: _cuenta,
+        detalleNuevo: _detalleRonda(),
+        metodo: pago.metodo,
+        entregado: pago.entregado,
+      );
+      final cocina = [
+        for (final l in _ronda)
+          if (_areas[l.producto['area_id']] == 'Cocina')
+            {'cantidad': l.cantidad.toStringAsFixed(0), 'descripcion': l.nombre, 'curso': 'ya'},
+      ];
+      if (cocina.isNotEmpty) Impresion.imprimirComanda('Cocina', _titulo, cocina).ignore();
+      if (pago.metodo == 'efectivo') Impresion.abrirCajon().catchError((_) {});
+      _ronda.clear();
+      _cuenta = null;
+      await _cargarCuentas();
+      EnviosPendientes.revisar(); // actualiza el aviso de ventas guardadas
+      if (mounted) await mostrarTicket(context, factura);
+      if (_modoMesa && mounted) {
+        Navigator.pop(context, true); // mesa cobrada: vuelve al plano
+        return;
+      }
+    } catch (e) {
+      _avisar('No se pudo cobrar: $e');
+    }
+    if (mounted) setState(() => _ocupado = false);
+    // Por si ha vuelto internet
+    _reintentarConexion();
+  }
+
+  String get _titulo => _modoMesa
+      ? 'Mesa ${widget.mesa!['nombre']}'
+      : (_cuenta?['nombre_llevar'] as String?) ?? 'Barra';
+
+  List<Map<String, dynamic>> _detalleRonda() => [
+        for (final l in _ronda)
+          {
+            'producto_id': l.producto['id'],
+            'area_id': l.producto['area_id'],
+            'descripcion': l.nombre,
+            'cantidad': l.cantidad,
+            'precio_unitario': l.precio,
+            'tipo_iva': ((l.producto['tipo_iva'] as num?) ?? 10).toDouble(),
+            'estado_cocina': _areas[l.producto['area_id']] == 'Cocina' ? 'pendiente' : 'servido',
+          },
+      ];
+
+  /// Sin internet: deja la ronda apuntada en la mesa o en la cuenta (se sube sola después).
+  Future<void> _apuntarSinConexion(String? nombre) async {
+    setState(() => _ocupado = true);
+    try {
+      final pedido = _cuenta ?? VentaOffline.nuevoPedido(nombre: nombre);
+      await VentaOffline.anadirACuenta(pedido, _detalleRonda());
+      final cocina = [
+        for (final l in _ronda)
+          if (_areas[l.producto['area_id']] == 'Cocina')
+            {'cantidad': l.cantidad.toStringAsFixed(0), 'descripcion': l.nombre, 'curso': 'ya'},
+      ];
+      if (cocina.isNotEmpty) {
+        Impresion.imprimirComanda('Cocina', _modoMesa ? _titulo : (nombre ?? _titulo), cocina).ignore();
+      }
+      _ronda.clear();
+      if (_modoMesa) {
+        if (mounted) Navigator.pop(context, true);
+        return;
+      }
+      _avisar(_cuenta == null ? 'Cuenta de $nombre abierta (sin internet)' : 'Añadido a la cuenta (sin internet)');
+      _cuenta = null;
+      await _cargarCuentas();
+    } catch (e) {
+      _avisar('No se pudo guardar: $e');
+    }
+    if (mounted) setState(() => _ocupado = false);
+  }
+
+  Future<void> _reintentarConexion() async {
+    if (!_sinConexion) return;
+    // Si hay conexión, el aviso de Conexion recarga la barra
+    final antes = Conexion.enLinea.value; // si cambia, ya recarga _alCambiarConexion
+    if (await Conexion.comprobar() && antes && mounted && _sinConexion) await _cargar();
+  }
+
   Future<void> _aCuenta() async {
     if (_ronda.isEmpty) return;
+    final sinRed = _sinConexion || !Conexion.enLinea.value;
+    if (sinRed && (_cuenta != null || _modoMesa)) return _apuntarSinConexion(null);
     String? nombre;
     if (_cuenta == null) {
       final ctrl = TextEditingController();
@@ -202,9 +384,20 @@ class _BarraPageState extends State<BarraPage> {
       );
       if (nombre == null || nombre.isEmpty) return;
     }
+    if (sinRed) return _apuntarSinConexion(nombre);
     setState(() => _ocupado = true);
     try {
-      await _guardarRonda(nombre: nombre);
+      try {
+        await _guardarRonda(nombre: nombre);
+      } catch (e) {
+        if (!esErrorDeRed(e)) rethrow;
+        // Se ha ido internet justo ahora: se apunta en el equipo
+        setState(() {
+          _ocupado = false;
+          _sinConexion = true;
+        });
+        return await _apuntarSinConexion(nombre);
+      }
       _avisar(_cuenta == null ? 'Cuenta de $nombre abierta' : 'Añadido a la cuenta de ${_cuenta!['nombre_llevar']}');
       _ronda.clear();
       _cuenta = null;
@@ -221,8 +414,16 @@ class _BarraPageState extends State<BarraPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_modoMesa) return _cuerpo();
+    return Scaffold(
+      appBar: AppBar(title: Text('$_titulo${widget.zona == null ? '' : ' · ${widget.zona}'} · sin internet')),
+      body: _cuerpo(),
+    );
+  }
+
+  Widget _cuerpo() {
     if (_cargando) return const Center(child: CircularProgressIndicator());
-    if (_error != null) return Center(child: Text('Error: $_error'));
+    if (_error != null) return Center(child: Text(textoError(_error)));
     final ancho = MediaQuery.sizeOf(context).width >= 900;
     final panel = _panel();
     return ancho
@@ -303,8 +504,19 @@ class _BarraPageState extends State<BarraPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Cuentas abiertas
-        Padding(
+        if (_sinConexion)
+          Material(
+            color: const Color(0xFFFDF0DC),
+            child: ListTile(
+              dense: true,
+              leading: const Icon(Icons.wifi_off, color: Color(0xFFB45309)),
+              title: const Text('Sin internet', style: TextStyle(fontWeight: FontWeight.w700)),
+              subtitle: const Text('Se cobra y firma en este equipo; se envía a Hacienda al volver la conexión'),
+              trailing: TextButton(onPressed: _ocupado ? null : _reintentarConexion, child: const Text('Reintentar')),
+            ),
+          ),
+        // Cuentas abiertas (no en modo mesa)
+        if (!_modoMesa) Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
           child: Row(
             children: [
@@ -319,7 +531,7 @@ class _BarraPageState extends State<BarraPage> {
             ],
           ),
         ),
-        SizedBox(
+        if (!_modoMesa) SizedBox(
           height: 44,
           child: _cuentas.isEmpty
               ? const Padding(
@@ -346,7 +558,12 @@ class _BarraPageState extends State<BarraPage> {
         const Divider(height: 24),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Text(_cuenta == null ? 'Venta rápida' : 'Cuenta de ${_cuenta!['nombre_llevar']}',
+          child: Text(
+              _modoMesa
+                  ? _titulo
+                  : _cuenta == null
+                      ? 'Venta rápida'
+                      : 'Cuenta de ${_cuenta!['nombre_llevar']}',
               style: titulo(22)),
         ),
         Expanded(
@@ -415,7 +632,7 @@ class _BarraPageState extends State<BarraPage> {
                     child: OutlinedButton.icon(
                       onPressed: _ronda.isEmpty || _ocupado ? null : _aCuenta,
                       icon: const Icon(Icons.bookmark_add_outlined),
-                      label: Text(_cuenta == null ? 'A cuenta' : 'Añadir'),
+                      label: Text(_modoMesa ? 'Guardar en la mesa' : _cuenta == null ? 'A cuenta' : 'Añadir'),
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -434,6 +651,82 @@ class _BarraPageState extends State<BarraPage> {
               ),
             ],
           ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Pago de una venta sin internet: un solo método.
+class _CobroSinConexion extends StatefulWidget {
+  const _CobroSinConexion({required this.total});
+  final double total;
+
+  @override
+  State<_CobroSinConexion> createState() => _CobroSinConexionState();
+}
+
+class _CobroSinConexionState extends State<_CobroSinConexion> {
+  String _metodo = 'efectivo';
+  final _entregado = TextEditingController();
+
+  @override
+  void dispose() {
+    _entregado.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final entregado = leerImporte(_entregado.text);
+    final cambio = entregado == null ? null : entregado - widget.total;
+    final valido = _metodo != 'efectivo' || entregado == null || entregado >= widget.total - 0.001;
+    return AlertDialog(
+      title: const Text('Cobrar sin internet'),
+      content: SizedBox(
+        width: 420,
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Text(euros(widget.total), style: titulo(34), textAlign: TextAlign.center),
+          const SizedBox(height: 12),
+          SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(value: 'efectivo', label: Text('Efectivo'), icon: Icon(Icons.payments_outlined)),
+              ButtonSegment(value: 'tarjeta', label: Text('Tarjeta'), icon: Icon(Icons.credit_card)),
+              ButtonSegment(value: 'bizum', label: Text('Bizum'), icon: Icon(Icons.phone_iphone)),
+            ],
+            selected: {_metodo},
+            onSelectionChanged: (v) => setState(() => _metodo = v.first),
+          ),
+          if (_metodo == 'efectivo') ...[
+            const SizedBox(height: 12),
+            TextField(
+              controller: _entregado,
+              autofocus: true,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: 'Entregado (opcional)', suffixText: '€'),
+              onChanged: (_) => setState(() {}),
+            ),
+            if (cambio != null && cambio >= 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text('Cambio: ${euros(cambio)}', style: titulo(20, color: C.verde)),
+              ),
+          ],
+          if (_metodo == 'tarjeta')
+            const Padding(
+              padding: EdgeInsets.only(top: 10),
+              child: Text('Comprueba que el datáfono tiene conexión (o cobra en efectivo).',
+                  style: TextStyle(color: C.gris, fontSize: 13)),
+            ),
+        ]),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+        FilledButton(
+          onPressed: valido
+              ? () => Navigator.pop(context, (metodo: _metodo, entregado: _metodo == 'efectivo' ? entregado : null))
+              : null,
+          child: const Text('Cobrar y emitir ticket'),
         ),
       ],
     );

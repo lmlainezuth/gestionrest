@@ -2,8 +2,11 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
+import '../../core/red.dart';
+import '../../core/tema.dart';
 import '../../main.dart';
 import '../ajustes/clientes_tab.dart' show editarCliente;
+import '../barra/venta_offline.dart';
 import 'facturacion_service.dart';
 import 'modelos.dart';
 import 'ticket_view.dart';
@@ -69,7 +72,9 @@ class _FacturasPageState extends State<FacturasPage> {
   Future<void> _reenviarPendientes(List<Map<String, dynamic>> facturas, List<Map<String, dynamic>> anulaciones) async {
     setState(() => _trabajando = true);
     var ok = 0;
-    for (final f in facturas) {
+    // De la más antigua a la más reciente: Hacienda espera recibir la cadena en orden
+    final orden = [...facturas]..sort((a, b) => (a['fecha'] as String).compareTo(b['fecha'] as String));
+    for (final f in orden) {
       try {
         if ((await FacturacionService().reenviar(f))['estado_envio'] == 'enviada') ok++;
       } catch (_) {}
@@ -256,7 +261,51 @@ class _FacturasPageState extends State<FacturasPage> {
         future: _facturas,
         builder: (context, snap) {
           if (snap.connectionState != ConnectionState.done) return const Center(child: CircularProgressIndicator());
-          if (snap.hasError) return Center(child: Text('Error: ${snap.error}'));
+          if (snap.hasError) {
+            return Center(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(24),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(esErrorDeRed(snap.error!) ? Icons.wifi_off : Icons.error_outline, size: 40, color: C.gris),
+                  const SizedBox(height: 12),
+                  Text(
+                    esErrorDeRed(snap.error!)
+                        ? 'Sin internet: la lista se verá al volver la conexión.\n'
+                            'Los tickets cobrados sin internet están guardados en este equipo y se envían solos.'
+                        : 'Error: ${snap.error}',
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton(onPressed: _recargar, child: const Text('Reintentar')),
+                  // Tickets cobrados sin internet en este equipo, aún sin subir
+                  FutureBuilder<List<Map<String, dynamic>>>(
+                    future: VentaOffline.cola(),
+                    builder: (context, c) {
+                      final cola = c.data ?? const [];
+                      if (cola.isEmpty) return const SizedBox();
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 20),
+                        child: Column(mainAxisSize: MainAxisSize.min, children: [
+                          Text('Guardados en este equipo (${cola.length})', style: titulo(16)),
+                          for (final v in cola)
+                            () {
+                              final f = Map<String, dynamic>.from(v['factura'] as Map);
+                              return ListTile(
+                                dense: true,
+                                leading: const Icon(Icons.cloud_off, color: Color(0xFFB45309)),
+                                title: Text('${f['serie']}-${f['numero']} · ${euros(f['importe_total'] as num)}'),
+                                subtitle: const Text('Se sube y se envía a Hacienda al volver internet'),
+                                onTap: () => mostrarTicket(context, f, imprimirAuto: false),
+                              );
+                            }(),
+                        ]),
+                      );
+                    },
+                  ),
+                ]),
+              ),
+            );
+          }
           final facturas = snap.data!;
           if (facturas.isEmpty) return const Center(child: Text('Todavía no hay facturas emitidas.'));
           // Las rechazadas no se reenvían tal cual: hay que corregirlas
@@ -320,7 +369,13 @@ class _FacturasPageState extends State<FacturasPage> {
       ].join('\n')),
       isThreeLine: true,
       onTap: () => mostrarTicket(context, f, imprimirAuto: false),
-      trailing: !valida || _trabajando
+      trailing: f['estado_envio'] == 'error' && !_trabajando
+          ? IconButton(
+              tooltip: 'Reintentar el envío (cuando se haya corregido la causa del rechazo)',
+              onPressed: () => _reenviarPendientes([f], const []),
+              icon: const Icon(Icons.refresh, color: Color(0xFFB3261E)),
+            )
+          : !valida || _trabajando
           ? null
           : PopupMenuButton<String>(
               tooltip: 'Acciones',

@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../../core/aviso_sin_conexion.dart';
 import '../../core/avisos_listo.dart';
 import '../../core/tema.dart';
-import '../../main.dart';
 import '../auth/perfil.dart';
 import '../barra/barra_page.dart';
 import 'mesas_view.dart';
@@ -42,7 +42,7 @@ class _CamareroHomeState extends State<CamareroHome> {
           IconButton(
             tooltip: 'Cerrar sesión',
             icon: const Icon(Icons.logout),
-            onPressed: () => supabase.auth.signOut(),
+            onPressed: () => cerrarSesion(context),
           ),
         ],
       ),

@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../../core/aviso_sin_conexion.dart';
+import '../../core/conexion.dart';
+import '../../core/red.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
 import '../carta/colores.dart' show leerImporte;
@@ -42,7 +45,24 @@ class _GastosPageState extends State<GastosPage> {
     _cargar();
   }
 
+  String? _errorCarga;
+
+  /// Carga sin quedarse colgada: sin internet enseña el aviso y se reintenta sola.
   Future<void> _cargar() async {
+    try {
+      await online(_cargarDatos);
+      if (_errorCarga != null && mounted) setState(() => _errorCarga = null);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorCarga = textoError(e);
+          _cargando = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _cargarDatos() async {
     final (desde, hasta) = rangoMes(_mes);
     var q = supabase.from('gastos').select('*, proveedores(nombre)');
     // "Debe" enseña todo lo pendiente, sea del mes que sea
@@ -87,7 +107,7 @@ class _GastosPageState extends State<GastosPage> {
             : await supabase.from('gastos').update(r.datos!).eq('id', g['id']);
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(textoError(e))));
     }
     await _cargar();
   }
@@ -189,7 +209,8 @@ class _GastosPageState extends State<GastosPage> {
             ),
         ]),
         const SizedBox(height: 16),
-        if (_cargando) const Padding(padding: EdgeInsets.all(30), child: Center(child: CircularProgressIndicator())),
+        if (_errorCarga != null) SizedBox(height: 320, child: AvisoSinConexion(_errorCarga!, onReintentar: _cargar)),
+        if (_cargando && _errorCarga == null) const Padding(padding: EdgeInsets.all(30), child: Center(child: CircularProgressIndicator())),
         if (!_cargando && filas.isEmpty)
           Container(
             padding: const EdgeInsets.all(30),

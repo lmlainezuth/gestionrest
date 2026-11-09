@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/aviso_sin_conexion.dart';
+import '../../core/conexion.dart';
+import '../../core/red.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
 import '../../core/permisos.dart';
@@ -144,7 +147,15 @@ class _UsuariosPageState extends State<UsuariosPage> {
   @override
   Widget build(BuildContext context) {
     if (_cargando) return const Center(child: CircularProgressIndicator());
-    if (_error != null) return Center(child: Text('Error: $_error'));
+    if (_error != null) {
+      return AvisoSinConexion(textoError(_error), onReintentar: () {
+        setState(() {
+          _error = null;
+          _cargando = true;
+        });
+        _cargar();
+      });
+    }
     final pendientes = _perfiles.where((p) => p['activo'] != true).length;
 
     return ListView(

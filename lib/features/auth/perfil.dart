@@ -1,4 +1,9 @@
+import 'dart:convert';
+
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../../core/permisos.dart';
+import '../../core/red.dart';
 import '../../main.dart';
 
 enum Rol { admin, camarero, cocinero }
@@ -37,10 +42,21 @@ class Perfil {
   /// Perfil en la empresa actual. Devuelve null si no hay sesión.
   /// Si el usuario no tiene empresa elegida, empresaId viene null.
   static Future<Perfil?> actual() async {
-    if (supabase.auth.currentUser == null) return null;
-    final filas = await supabase.rpc('mi_perfil') as List;
-    if (filas.isEmpty) return cache = null;
-    final m = Map<String, dynamic>.from(filas.first as Map);
+    final uid = supabase.auth.currentUser?.id;
+    if (uid == null) return null;
+    Map<String, dynamic> m;
+    try {
+      final filas = await supabase.rpc('mi_perfil') as List;
+      if (filas.isEmpty) return cache = null;
+      m = Map<String, dynamic>.from(filas.first as Map);
+      // Copia en el equipo: si se abre la app sin internet, se entra con el último perfil
+      SharedPreferences.getInstance().then((p) => p.setString('perfil_$uid', jsonEncode(m))).ignore();
+    } catch (e) {
+      if (!esErrorDeRed(e)) rethrow;
+      final copia = (await SharedPreferences.getInstance()).getString('perfil_$uid');
+      if (copia == null) rethrow;
+      m = Map<String, dynamic>.from(jsonDecode(copia) as Map);
+    }
     return cache = Perfil(
       id: m['id'] as String,
       nombre: m['nombre'] as String,

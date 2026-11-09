@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/red.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
 import '../auth/perfil.dart';
@@ -87,7 +88,7 @@ class _ComandaPageState extends State<ComandaPage> {
       ]);
       final consulta = supabase.from('pedidos').select(
           'id, tipo, mesa_id, nombre_llevar, num_personas, total, creado_en, estado, '
-          'pedido_detalle(id, producto_id, area_id, descripcion, cantidad, precio_unitario, nota, curso, '
+          'pedido_detalle(id, producto_id, area_id, descripcion, cantidad, precio_unitario, tipo_iva, nota, curso, '
           'estado_cocina, en_espera, anulado_motivo, creado_en)');
       final idPedido = _pedido?['id'] as String? ?? widget.pedidoId;
       final pedido = widget.mesa != null
@@ -189,7 +190,7 @@ class _ComandaPageState extends State<ComandaPage> {
         );
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(textoError(e))));
     }
   }
 
@@ -304,7 +305,7 @@ class _ComandaPageState extends State<ComandaPage> {
   @override
   Widget build(BuildContext context) {
     if (_cargando) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    if (_error != null) return Scaffold(appBar: AppBar(), body: Center(child: Text('Error: $_error')));
+    if (_error != null) return Scaffold(appBar: AppBar(), body: Center(child: Text(textoError(_error))));
 
     final ancho = MediaQuery.sizeOf(context).width >= 900;
     return PopScope(

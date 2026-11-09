@@ -6,6 +6,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
+import '../../core/red.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
 import '../gestion/comun.dart' show leerTodo;
@@ -129,7 +130,7 @@ class _InformesPageState extends State<InformesPage> {
         if (_cargando)
           const Padding(padding: EdgeInsets.all(48), child: Center(child: CircularProgressIndicator()))
         else if (_error != null)
-          Text('Error: $_error')
+          Text(textoError(_error))
         else if (_pedidos.isEmpty)
           Padding(
             padding: const EdgeInsets.all(48),
