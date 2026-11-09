@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'core/config.dart';
+import 'core/tema.dart';
 import 'features/auth/auth_gate.dart';
 
 Future<void> main() async {
@@ -24,10 +25,7 @@ class GestionRestApp extends StatelessWidget {
     return MaterialApp(
       title: 'GestiónRest',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorSchemeSeed: const Color(0xFF2E7D32),
-        useMaterial3: true,
-      ),
+      theme: temaGestionRest(),
       home: const AuthGate(),
     );
   }

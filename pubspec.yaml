@@ -37,6 +37,7 @@ dependencies:
   supabase_flutter: ^2.18.3
   crypto: ^3.0.8
   qr_flutter: ^4.1.0
+  google_fonts: ^9.0.0
 
 dev_dependencies:
   flutter_test:
