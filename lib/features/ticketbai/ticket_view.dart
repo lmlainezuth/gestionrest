@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../../core/impresion.dart';
 import 'modelos.dart';
 
 /// Factura simplificada tal como sale impresa (80 mm).
@@ -34,10 +35,17 @@ class TicketView extends StatelessWidget {
               textAlign: TextAlign.center, style: negrita.copyWith(fontSize: 14)),
           Text('NIF ${factura['nif_emisor']}', textAlign: TextAlign.center, style: mono),
           linea,
-          Text('FACTURA SIMPLIFICADA', style: negrita),
+          Text(factura['tipo'] == 'completa' ? 'FACTURA' : 'FACTURA SIMPLIFICADA', style: negrita),
           Text('Nº ${factura['serie']}-${factura['numero']}', style: mono),
           Text('${dos(fecha.day)}/${dos(fecha.month)}/${fecha.year} '
               '${dos(fecha.hour)}:${dos(fecha.minute)}', style: mono),
+          if (factura['tipo'] == 'completa') ...[
+            linea,
+            Text('Cliente: ${factura['cliente_nombre']}', style: mono),
+            Text('NIF: ${factura['cliente_nif']}', style: mono),
+            if ((factura['cliente_direccion'] as String?)?.isNotEmpty ?? false)
+              Text('${factura['cliente_direccion']}', style: mono),
+          ],
           linea,
           for (final l in lineas)
             fila('${l.cantidad.toStringAsFixed(0)} ${l.descripcion}',
@@ -68,4 +76,35 @@ class TicketView extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Muestra el ticket y, si hay impresora de tickets configurada, lo imprime.
+Future<void> mostrarTicket(BuildContext context, Map<String, dynamic> factura, {bool imprimirAuto = true}) async {
+  if (imprimirAuto) Impresion.imprimirTicket(factura, soloSiConfigurada: true).ignore();
+  await showDialog<void>(
+    context: context,
+    builder: (ctx) => Dialog(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(child: SingleChildScrollView(child: TicketView(factura: factura))),
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: () => Impresion.imprimirTicket(factura).ignore(),
+                  icon: const Icon(Icons.print_outlined),
+                  label: const Text('Imprimir'),
+                ),
+                const SizedBox(width: 8),
+                FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cerrar')),
+              ],
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 }

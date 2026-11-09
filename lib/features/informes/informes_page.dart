@@ -1,16 +1,25 @@
+import 'dart:convert';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 
 import '../../core/tema.dart';
 import '../../main.dart';
+import '../gestion/comun.dart' show leerTodo;
 import '../ticketbai/modelos.dart' show euros;
 
-enum _Periodo { hoy, ayer, semana, mes }
+enum _Periodo { hoy, ayer, semana, mes, ano, elegir }
 
 const _nombresPeriodo = {
   _Periodo.hoy: 'Hoy',
   _Periodo.ayer: 'Ayer',
   _Periodo.semana: 'Últimos 7 días',
   _Periodo.mes: 'Este mes',
+  _Periodo.ano: 'Este año',
+  _Periodo.elegir: 'Elegir fechas…',
 };
 const _metodos = {'efectivo': 'Efectivo', 'tarjeta': 'Tarjeta', 'bizum': 'Bizum', 'credito': 'Crédito'};
 
@@ -24,6 +33,7 @@ class InformesPage extends StatefulWidget {
 
 class _InformesPageState extends State<InformesPage> {
   _Periodo _periodo = _Periodo.hoy;
+  DateTimeRange? _elegido;
   bool _cargando = true;
   String? _error;
   List<Map<String, dynamic>> _pedidos = [];
@@ -43,6 +53,8 @@ class _InformesPageState extends State<InformesPage> {
       _Periodo.ayer => (hoy.subtract(const Duration(days: 1)), hoy),
       _Periodo.semana => (hoy.subtract(const Duration(days: 6)), hoy.add(const Duration(days: 1))),
       _Periodo.mes => (DateTime(ahora.year, ahora.month), hoy.add(const Duration(days: 1))),
+      _Periodo.ano => (DateTime(ahora.year), hoy.add(const Duration(days: 1))),
+      _Periodo.elegir => (_elegido!.start, _elegido!.end.add(const Duration(days: 1))),
     };
   }
 
@@ -50,13 +62,15 @@ class _InformesPageState extends State<InformesPage> {
     setState(() => _cargando = true);
     final (desde, hasta) = _rango();
     try {
-      final pedidos = await supabase
+      final pedidos = await leerTodo((a, b) => supabase
           .from('pedidos')
-          .select('id, total, num_personas, pagado_en, camarero_id, '
+          .select('id, numero, tipo, nombre_llevar, mesas(nombre), total, num_personas, pagado_en, camarero_id, '
               'pagos(metodo, importe), pedido_detalle(descripcion, cantidad, precio_unitario, estado_cocina)')
           .eq('estado', 'pagado')
           .gte('pagado_en', desde.toUtc().toIso8601String())
-          .lt('pagado_en', hasta.toUtc().toIso8601String());
+          .lt('pagado_en', hasta.toUtc().toIso8601String())
+          .order('pagado_en')
+          .range(a, b));
       final perfiles = await supabase.from('perfiles').select('id, nombre');
       _pedidos = List<Map<String, dynamic>>.from(pedidos);
       _nombres = {for (final p in perfiles) p['id'] as String: p['nombre'] as String};
@@ -81,14 +95,37 @@ class _InformesPageState extends State<InformesPage> {
                 label: Text(_nombresPeriodo[p]!),
                 selected: p == _periodo,
                 showCheckmark: false,
-                onSelected: (_) {
+                onSelected: (_) async {
+                  if (p == _Periodo.elegir) {
+                    final hoy = DateTime.now();
+                    final r = await showDateRangePicker(
+                      context: context,
+                      firstDate: DateTime(2024),
+                      lastDate: hoy,
+                      initialDateRange: _elegido ?? DateTimeRange(start: hoy.subtract(const Duration(days: 7)), end: hoy),
+                      locale: const Locale('es'),
+                    );
+                    if (r == null) return;
+                    _elegido = r;
+                  }
                   _periodo = p;
                   _cargar();
                 },
               ),
           ],
         ),
-        const SizedBox(height: 24),
+        if (_periodo == _Periodo.elegir && _elegido != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text('Del ${_d(_elegido!.start)} al ${_d(_elegido!.end)}', style: const TextStyle(color: C.gris)),
+          ),
+        const SizedBox(height: 12),
+        if (!_cargando && _error == null && _pedidos.isNotEmpty)
+          Wrap(spacing: 8, children: [
+            OutlinedButton.icon(onPressed: _exportarCsv, icon: const Icon(Icons.table_view_outlined), label: const Text('Exportar a Excel (CSV)')),
+            OutlinedButton.icon(onPressed: _imprimir, icon: const Icon(Icons.print_outlined), label: const Text('Imprimir resumen')),
+          ]),
+        const SizedBox(height: 16),
         if (_cargando)
           const Padding(padding: EdgeInsets.all(48), child: Center(child: CircularProgressIndicator()))
         else if (_error != null)
@@ -123,11 +160,14 @@ class _InformesPageState extends State<InformesPage> {
     }
 
     // Por hora (o por día si el periodo es largo)
-    final porDia = _periodo == _Periodo.semana || _periodo == _Periodo.mes;
+    final (d0, d1) = _rango();
+    final dias = d1.difference(d0).inDays;
+    final porMes = dias > 62;
+    final porDia = !porMes && dias > 1;
     final franjas = <String, double>{};
     for (final p in _pedidos) {
       final f = DateTime.parse(p['pagado_en'] as String).toLocal();
-      final clave = porDia ? '${f.day.toString().padLeft(2, '0')}/${f.month.toString().padLeft(2, '0')}' : '${f.hour.toString().padLeft(2, '0')}h';
+      final clave = porMes ? '${f.month.toString().padLeft(2, '0')}/${f.year}' : porDia ? '${f.day.toString().padLeft(2, '0')}/${f.month.toString().padLeft(2, '0')}' : '${f.hour.toString().padLeft(2, '0')}h';
       franjas[clave] = (franjas[clave] ?? 0) + (p['total'] as num).toDouble();
     }
     final claves = franjas.keys.toList()..sort((a, b) => _ordenFranja(a).compareTo(_ordenFranja(b)));
@@ -218,6 +258,131 @@ class _InformesPageState extends State<InformesPage> {
   }
 
   static double _max(double a, double b) => a > b ? a : b;
+
+  static String _d(DateTime f) => '${f.day.toString().padLeft(2, '0')}/${f.month.toString().padLeft(2, '0')}/${f.year}';
+  static String _n(num v) => v.toStringAsFixed(2).replaceAll('.', ',');
+
+  String get _textoPeriodo {
+    final (desde, hasta) = _rango();
+    return 'Del ${_d(desde)} al ${_d(hasta.subtract(const Duration(days: 1)))}';
+  }
+
+  String _dondePedido(Map<String, dynamic> p) {
+    final mesa = (p['mesas'] as Map?)?['nombre'];
+    if (mesa != null) return 'Mesa $mesa';
+    if (p['tipo'] == 'barra') return 'Barra';
+    return 'Llevar ${p['nombre_llevar'] ?? ''}';
+  }
+
+  /// CSV con ; y BOM para que Excel en español lo abra bien.
+  Future<void> _exportarCsv() async {
+    final b = StringBuffer('\uFEFF');
+    b.writeln('Fecha;Hora;Pedido;Dónde;Camarero;Comensales;Efectivo;Tarjeta;Bizum;Total');
+    for (final p in _pedidos) {
+      final f = DateTime.parse(p['pagado_en'] as String).toLocal();
+      double m(String metodo) => (p['pagos'] as List)
+          .where((x) => x['metodo'] == metodo)
+          .fold(0.0, (s, x) => s + (x['importe'] as num).toDouble());
+      b.writeln([
+        _d(f),
+        '${f.hour.toString().padLeft(2, '0')}:${f.minute.toString().padLeft(2, '0')}',
+        p['numero'],
+        _dondePedido(p),
+        _nombres[p['camarero_id']] ?? '',
+        p['num_personas'] ?? '',
+        _n(m('efectivo')),
+        _n(m('tarjeta')),
+        _n(m('bizum')),
+        _n(p['total'] as num),
+      ].join(';'));
+    }
+    b.writeln();
+    b.writeln('Producto;Unidades;Importe');
+    final prod = <String, (double, double)>{};
+    for (final p in _pedidos) {
+      for (final d in (p['pedido_detalle'] as List)) {
+        if (d['estado_cocina'] == 'anulado') continue;
+        final u = (d['cantidad'] as num).toDouble();
+        final prev = prod[d['descripcion']] ?? (0.0, 0.0);
+        prod[d['descripcion'] as String] = (prev.$1 + u, prev.$2 + u * (d['precio_unitario'] as num));
+      }
+    }
+    for (final e in prod.entries.toList()..sort((a, b) => b.value.$2.compareTo(a.value.$2))) {
+      b.writeln('${e.key.replaceAll(';', ',')};${e.value.$1.toStringAsFixed(0)};${_n(e.value.$2)}');
+    }
+    final bytes = utf8.encode(b.toString());
+    final (desde, _) = _rango();
+    final ruta = await FilePicker.saveFile(
+      dialogTitle: 'Guardar informe',
+      fileName: 'ventas_${desde.year}-${desde.month.toString().padLeft(2, '0')}-${desde.day.toString().padLeft(2, '0')}.csv',
+      bytes: bytes,
+    );
+    if (ruta == null) return;
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Informe guardado')));
+  }
+
+  Future<void> _imprimir() async {
+    final total = _pedidos.fold(0.0, (s, p) => s + (p['total'] as num).toDouble());
+    final base = total / 1.10;
+    final porMetodo = <String, double>{};
+    final prod = <String, (double, double)>{};
+    final cam = <String, (int, double)>{};
+    for (final p in _pedidos) {
+      for (final x in (p['pagos'] as List)) {
+        porMetodo[x['metodo'] as String] = (porMetodo[x['metodo']] ?? 0) + (x['importe'] as num).toDouble();
+      }
+      for (final d in (p['pedido_detalle'] as List)) {
+        if (d['estado_cocina'] == 'anulado') continue;
+        final u = (d['cantidad'] as num).toDouble();
+        final prev = prod[d['descripcion']] ?? (0.0, 0.0);
+        prod[d['descripcion'] as String] = (prev.$1 + u, prev.$2 + u * (d['precio_unitario'] as num));
+      }
+      final n = _nombres[p['camarero_id']] ?? 'Sin asignar';
+      final prev = cam[n] ?? (0, 0.0);
+      cam[n] = (prev.$1 + 1, prev.$2 + (p['total'] as num).toDouble());
+    }
+    final top = prod.entries.toList()..sort((a, b) => b.value.$2.compareTo(a.value.$2));
+    pw.Widget tabla(List<String> cab, List<List<String>> filas) => pw.TableHelper.fromTextArray(
+          headers: cab,
+          data: filas,
+          headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+          cellAlignments: {for (var i = 1; i < cab.length; i++) i: pw.Alignment.centerRight},
+        );
+    pw.ThemeData tema;
+    try {
+      tema = pw.ThemeData.withFont(base: await PdfGoogleFonts.robotoRegular(), bold: await PdfGoogleFonts.robotoBold());
+    } catch (_) {
+      tema = pw.ThemeData.base();
+    }
+    final doc = pw.Document()
+      ..addPage(pw.MultiPage(
+        theme: tema,
+        pageFormat: PdfPageFormat.a4,
+        build: (_) => [
+          pw.Text('Informe de ventas', style: pw.TextStyle(fontSize: 22, fontWeight: pw.FontWeight.bold)),
+          pw.Text(_textoPeriodo),
+          pw.SizedBox(height: 16),
+          tabla(['Concepto', 'Importe'], [
+            ['Ventas (IVA incl.)', euros(total)],
+            ['Base imponible', euros(base)],
+            ['IVA 10 %', euros(total - base)],
+            ['Tickets', '${_pedidos.length}'],
+            ['Ticket medio', euros(total / _pedidos.length)],
+          ]),
+          pw.SizedBox(height: 16),
+          pw.Text('Formas de pago', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+          tabla(['Método', 'Importe'], [for (final e in porMetodo.entries) [_metodos[e.key] ?? e.key, euros(e.value)]]),
+          pw.SizedBox(height: 16),
+          pw.Text('Productos más vendidos', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+          tabla(['Producto', 'Uds.', 'Importe'],
+              [for (final e in top.take(20)) [e.key, e.value.$1.toStringAsFixed(0), euros(e.value.$2)]]),
+          pw.SizedBox(height: 16),
+          pw.Text('Ventas por camarero', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+          tabla(['Camarero', 'Tickets', 'Importe'], [for (final e in cam.entries) [e.key, '${e.value.$1}', euros(e.value.$2)]]),
+        ],
+      ));
+    await Printing.layoutPdf(name: 'Informe de ventas', onLayout: (_) async => doc.save());
+  }
 
   /// "09h" y "dd/mm" ordenables
   static String _ordenFranja(String k) {

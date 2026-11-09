@@ -44,14 +44,8 @@ class _FacturasPageState extends State<FacturasPage> {
     }
   }
 
-  void _verTicket(Map<String, dynamic> f) {
-    showDialog<void>(
-      context: context,
-      builder: (_) => Dialog(
-        child: SingleChildScrollView(child: TicketView(factura: f)),
-      ),
-    );
-  }
+  void _verTicket(Map<String, dynamic> f) => mostrarTicket(context, f, imprimirAuto: false);
+
 
   @override
   Widget build(BuildContext context) {

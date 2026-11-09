@@ -69,13 +69,16 @@ class _CocinaPageState extends State<CocinaPage> {
   Future<void> _cargar() async {
     try {
       final haceUnaHora = DateTime.now().toUtc().subtract(const Duration(hours: 1)).toIso8601String();
+      final hace15 = DateTime.now().toUtc().subtract(const Duration(minutes: 15)).toIso8601String();
       final filas = await supabase
           .from('pedido_detalle')
           .select('id, pedido_id, descripcion, cantidad, nota, curso, estado_cocina, en_espera, '
-              'area_id, creado_en, listo_en, productos(alergenos), '
+              'area_id, creado_en, listo_en, anulado_motivo, productos(alergenos), '
               'pedidos!inner(id, numero, tipo, nombre_llevar, estado, mesas(nombre))')
           .neq('pedidos.estado', 'anulado')
-          .or('estado_cocina.in.(pendiente,preparando),and(estado_cocina.eq.listo,listo_en.gte.$haceUnaHora)')
+          .or('estado_cocina.in.(pendiente,preparando),'
+              'and(estado_cocina.eq.listo,listo_en.gte.$haceUnaHora),'
+              'and(estado_cocina.eq.anulado,anulado_en.gte.$hace15)')
           .order('creado_en');
       _lineas = List<Map<String, dynamic>>.from(filas);
       _error = null;
@@ -130,7 +133,7 @@ class _CocinaPageState extends State<CocinaPage> {
     for (final l in _lineas) {
       final ok = vista == 'Listos'
           ? l['estado_cocina'] == 'listo'
-          : l['estado_cocina'] != 'listo' && l['en_espera'] != true && _areaDe(l) == vista;
+          : !['listo', 'anulado'].contains(l['estado_cocina']) && l['en_espera'] != true && _areaDe(l) == vista;
       if (ok) pedidos.add(l['pedido_id'] as String);
     }
     return pedidos.length;
@@ -308,7 +311,7 @@ class _TarjetaComanda extends StatelessWidget {
               ],
             ),
           ),
-          if (!vistaListos && activas.isNotEmpty)
+          if (!vistaListos && (pendientes.isNotEmpty || preparando.isNotEmpty))
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
               child: SizedBox(
@@ -343,7 +346,9 @@ class _Plato extends StatelessWidget {
     final al = (((linea['productos'] as Map?)?['alergenos'] as List?) ?? []).cast<String>();
     final nota = linea['nota'] as String?;
     final siguiente = switch (estado) { 'pendiente' => 'preparando', 'preparando' => 'listo', _ => 'pendiente' };
+    final anulado = estado == 'anulado';
     final marca = switch (estado) {
+      'anulado' => const Icon(Icons.cancel, color: Color(0xFFFF6B5B), size: 20),
       'preparando' => const Icon(Icons.local_fire_department, color: _amarillo, size: 20),
       'listo' => const Icon(Icons.check_circle, color: _menta, size: 20),
       _ => const Icon(Icons.radio_button_unchecked, color: _apagado, size: 20),
@@ -351,7 +356,7 @@ class _Plato extends StatelessWidget {
 
     return InkWell(
       borderRadius: BorderRadius.circular(8),
-      onTap: () => onCambiar([linea], siguiente),
+      onTap: anulado ? null : () => onCambiar([linea], siguiente),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Row(
@@ -370,9 +375,13 @@ class _Plato extends StatelessWidget {
                         color: _texto,
                         fontSize: 18,
                         fontWeight: FontWeight.w600,
-                        decoration: estado == 'listo' ? TextDecoration.lineThrough : null,
+                        decoration: estado == 'listo' || anulado ? TextDecoration.lineThrough : null,
                       )),
-                  Text(_cursos[linea['curso']] ?? '', style: const TextStyle(color: _apagado, fontSize: 12)),
+                  if (anulado)
+                    Text('ANULADO · ${linea['anulado_motivo'] ?? ''}',
+                        style: const TextStyle(color: Color(0xFFFF6B5B), fontSize: 14, fontWeight: FontWeight.w700))
+                  else
+                    Text(_cursos[linea['curso']] ?? '', style: const TextStyle(color: _apagado, fontSize: 12)),
                   if (nota != null && nota.isNotEmpty)
                     Text(nota, style: const TextStyle(color: Color(0xFFF2B183), fontSize: 15)),
                   if (al.isNotEmpty)

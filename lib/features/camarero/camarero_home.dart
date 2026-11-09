@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/avisos_listo.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
 import '../auth/perfil.dart';
@@ -16,10 +17,18 @@ class CamareroHome extends StatefulWidget {
 }
 
 class _CamareroHomeState extends State<CamareroHome> {
-  int _vista = 0;
+  late int _vista = _vistas.indexWhere((v) => v.texto == 'Barra').clamp(0, _vistas.length);
+
+  late final _vistas = [
+    if (widget.perfil.puede('mesas'))
+      (pagina: const MesasView() as Widget, icono: Icons.grid_view_rounded, texto: 'Mesas'),
+    if (widget.perfil.puede('barra'))
+      (pagina: const BarraPage() as Widget, icono: Icons.local_bar_outlined, texto: 'Barra'),
+  ];
 
   @override
   Widget build(BuildContext context) {
+    if (_vistas.isEmpty) return const Scaffold(body: Center(child: Text('Sin permisos asignados')));
     return Scaffold(
       appBar: AppBar(
         title: Row(
@@ -37,17 +46,19 @@ class _CamareroHomeState extends State<CamareroHome> {
           ),
         ],
       ),
-      body: _vista == 0 ? const MesasView() : const BarraPage(),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _vista,
-        backgroundColor: C.blanco,
-        indicatorColor: C.verde,
-        onDestinationSelected: (i) => setState(() => _vista = i),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.grid_view_rounded), selectedIcon: Icon(Icons.grid_view_rounded, color: C.sobreAccion), label: 'Mesas'),
-          NavigationDestination(icon: Icon(Icons.local_bar_outlined), selectedIcon: Icon(Icons.local_bar, color: C.sobreAccion), label: 'Barra'),
-        ],
-      ),
+      body: AvisosListo(child: _vistas[_vista.clamp(0, _vistas.length - 1)].pagina),
+      bottomNavigationBar: _vistas.length < 2
+          ? null
+          : NavigationBar(
+              selectedIndex: _vista,
+              backgroundColor: C.blanco,
+              indicatorColor: C.verde,
+              onDestinationSelected: (i) => setState(() => _vista = i),
+              destinations: [
+                for (final v in _vistas)
+                  NavigationDestination(icon: Icon(v.icono), selectedIcon: Icon(v.icono, color: C.sobreAccion), label: v.texto),
+              ],
+            ),
     );
   }
 }

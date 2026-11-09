@@ -3,7 +3,10 @@ import 'package:flutter/material.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
 import '../auth/perfil.dart';
+import '../../core/impresion.dart';
 import '../caja/cobro_dialog.dart';
+import 'comanda_acciones.dart';
+import 'modificadores_picker.dart';
 import '../carta/alergenos.dart';
 import '../carta/colores.dart';
 import '../ticketbai/modelos.dart' show euros;
@@ -21,22 +24,26 @@ const _estadosCocina = {
 
 /// Una línea de la ronda que aún no se ha enviado.
 class _Linea {
-  _Linea(this.producto, this.curso);
+  _Linea(this.producto, this.curso, [this.mods = const []]);
   final Map<String, dynamic> producto;
+  final List<Map<String, dynamic>> mods;
   double cantidad = 1;
   String nota = '';
   String curso;
 
-  double get precio => (producto['precio_venta'] as num).toDouble();
+  String get nombre => nombreConModificadores(producto, mods);
+  double get precio => precioConModificadores(producto, mods);
   double get total => cantidad * precio;
 }
 
 /// Toma de comanda de una mesa: carta a la izquierda (o arriba en móvil)
 /// y la ronda a la derecha (o abajo).
 class ComandaPage extends StatefulWidget {
-  const ComandaPage({super.key, required this.mesa, required this.zona});
-  final Map<String, dynamic> mesa;
+  const ComandaPage({super.key, this.mesa, this.zona = '', this.pedidoId, this.nombreLlevar});
+  final Map<String, dynamic>? mesa; // null = para llevar
   final String zona;
+  final String? pedidoId; // para llevar ya abierto
+  final String? nombreLlevar; // para llevar nuevo
 
   @override
   State<ComandaPage> createState() => _ComandaPageState();
@@ -55,7 +62,11 @@ class _ComandaPageState extends State<ComandaPage> {
 
   Map<String, dynamic>? _pedido;
   final List<_Linea> _ronda = [];
-  late int _pax = (widget.mesa['capacidad'] as int?) ?? 2;
+  late int _pax = (widget.mesa?['capacidad'] as int?) ?? 1;
+
+  String get _titulo => widget.mesa != null
+      ? 'Mesa ${widget.mesa!['nombre']}'
+      : 'Llevar · ${_pedido?['nombre_llevar'] ?? widget.nombreLlevar ?? ''}';
 
   @override
   void initState() {
@@ -69,20 +80,26 @@ class _ComandaPageState extends State<ComandaPage> {
         supabase.from('grupos_productos').select('id, nombre, color').eq('activo', true).order('orden').order('nombre'),
         supabase
             .from('productos')
-            .select('id, grupo_id, area_id, nombre, precio_venta, alergenos')
+            .select('id, grupo_id, area_id, nombre, precio_venta, alergenos, imagen_url, producto_modificadores(modificadores(id, nombre, precio, activo))')
             .eq('activo', true)
             .order('nombre'),
         supabase.from('areas_preparacion').select('id, nombre'),
       ]);
-      final pedido = await supabase
-          .from('pedidos')
-          .select('id, num_personas, total, creado_en, estado, '
-              'pedido_detalle(id, descripcion, cantidad, precio_unitario, nota, curso, estado_cocina, en_espera, creado_en)')
-          .eq('mesa_id', widget.mesa['id'])
-          .inFilter('estado', ['abierto', 'precuenta'])
-          .order('creado_en')
-          .limit(1)
-          .maybeSingle();
+      final consulta = supabase.from('pedidos').select(
+          'id, tipo, mesa_id, nombre_llevar, num_personas, total, creado_en, estado, '
+          'pedido_detalle(id, producto_id, area_id, descripcion, cantidad, precio_unitario, nota, curso, '
+          'estado_cocina, en_espera, anulado_motivo, creado_en)');
+      final idPedido = _pedido?['id'] as String? ?? widget.pedidoId;
+      final pedido = widget.mesa != null
+          ? await consulta
+              .eq('mesa_id', widget.mesa!['id'])
+              .inFilter('estado', ['abierto', 'precuenta'])
+              .order('creado_en')
+              .limit(1)
+              .maybeSingle()
+          : idPedido == null
+              ? null
+              : await consulta.eq('id', idPedido).inFilter('estado', ['abierto', 'precuenta']).maybeSingle();
       _grupos = List<Map<String, dynamic>>.from(r[0]);
       _productos = List<Map<String, dynamic>>.from(r[1]);
       _areas = {for (final a in r[2]) a['id'] as String: a['nombre'] as String};
@@ -97,15 +114,19 @@ class _ComandaPageState extends State<ComandaPage> {
 
   // ---------------- Ronda ----------------
 
-  void _anadir(Map<String, dynamic> p) {
+  Future<void> _anadir(Map<String, dynamic> p) async {
+    final mods = await elegirModificadores(context, p);
+    if (mods == null || !mounted) return;
     final esBarra = _areas[p['area_id']] == 'Barra';
     final curso = esBarra ? 'ya' : '1';
-    final existente = _ronda.where((l) => l.producto['id'] == p['id'] && l.nota.isEmpty && l.curso == curso);
+    final clave = claveModificadores(mods);
+    final existente = _ronda.where((l) =>
+        l.producto['id'] == p['id'] && l.nota.isEmpty && l.curso == curso && claveModificadores(l.mods) == clave);
     setState(() {
       if (existente.isNotEmpty) {
         existente.first.cantidad++;
       } else {
-        _ronda.add(_Linea(p, curso));
+        _ronda.add(_Linea(p, curso, mods));
       }
     });
   }
@@ -177,11 +198,31 @@ class _ComandaPageState extends State<ComandaPage> {
     await _cargar();
   }
 
+  Future<void> _accion(String v) async {
+    final ok = switch (v) {
+      'cambiar' => await cambiarMesa(context, _pedido!, widget.mesa!),
+      'unir' => await unirMesa(context, _pedido!, widget.mesa!),
+      _ => await dividirCuenta(context, _pedido!),
+    };
+    if (!ok || !mounted) return;
+    if (v == 'cambiar') {
+      Navigator.pop(context, true);
+      return;
+    }
+    await _cargar();
+    if (_pedido == null && mounted) Navigator.pop(context, true);
+  }
+
   Future<void> _precuenta() async {
     await supabase.from('pedidos').update({'estado': 'precuenta'}).eq('id', _pedido!['id']);
+    Impresion.imprimirPrecuenta(
+      _titulo,
+      ((_pedido!['pedido_detalle'] as List?) ?? []).cast<Map<String, dynamic>>(),
+      _pedido!['total'] as num,
+    ).ignore();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Mesa ${widget.mesa['nombre']}: pide la cuenta')),
+      SnackBar(content: Text('$_titulo: pide la cuenta')),
     );
     Navigator.pop(context, true);
   }
@@ -190,13 +231,10 @@ class _ComandaPageState extends State<ComandaPage> {
     final factura = await showDialog<Map<String, dynamic>>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => CobroDialog(pedido: _pedido!, mesaId: widget.mesa['id'] as String),
+      builder: (_) => CobroDialog(pedido: _pedido!, mesaId: widget.mesa?['id'] as String?),
     );
     if (factura == null || !mounted) return;
-    await showDialog<void>(
-      context: context,
-      builder: (_) => Dialog(child: SingleChildScrollView(child: TicketView(factura: factura))),
-    );
+    await mostrarTicket(context, factura);
     if (mounted) Navigator.pop(context, true);
   }
 
@@ -209,8 +247,9 @@ class _ComandaPageState extends State<ComandaPage> {
         final nuevo = await supabase
             .from('pedidos')
             .insert({
-              'tipo': 'mesa',
-              'mesa_id': widget.mesa['id'],
+              'tipo': widget.mesa != null ? 'mesa' : 'llevar',
+              'mesa_id': widget.mesa?['id'],
+              'nombre_llevar': widget.mesa == null ? widget.nombreLlevar : null,
               'num_personas': _pax,
               'camarero_id': supabase.auth.currentUser?.id,
             })
@@ -224,7 +263,7 @@ class _ComandaPageState extends State<ComandaPage> {
             'pedido_id': pedidoId,
             'producto_id': l.producto['id'],
             'area_id': l.producto['area_id'],
-            'descripcion': l.producto['nombre'],
+            'descripcion': l.nombre,
             'cantidad': l.cantidad,
             'precio_unitario': l.precio,
             'nota': l.nota.isEmpty ? null : l.nota,
@@ -232,12 +271,25 @@ class _ComandaPageState extends State<ComandaPage> {
             'en_espera': l.curso == '2' || l.curso == 'postre',
           },
       ]);
-      if (widget.mesa['disponibilidad'] != 'ocupada') {
-        await supabase.from('mesas').update({'disponibilidad': 'ocupada'}).eq('id', widget.mesa['id']);
+      // Comandas impresas por área (si el equipo tiene impresora configurada)
+      final porArea = <String, List<Map<String, dynamic>>>{};
+      for (final l in _ronda) {
+        porArea.putIfAbsent(_areas[l.producto['area_id']] ?? 'Cocina', () => []).add({
+          'cantidad': l.cantidad.toStringAsFixed(0),
+          'descripcion': l.nombre,
+          'nota': l.nota,
+          'curso': _cursos[l.curso],
+        });
+      }
+      for (final e in porArea.entries) {
+        Impresion.imprimirComanda(e.key, _titulo, e.value).ignore();
+      }
+      if (widget.mesa != null && widget.mesa!['disponibilidad'] != 'ocupada') {
+        await supabase.from('mesas').update({'disponibilidad': 'ocupada'}).eq('id', widget.mesa!['id']);
       }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Mesa ${widget.mesa['nombre']}: enviado a cocina y barra')),
+        SnackBar(content: Text('$_titulo: enviado a cocina y barra')),
       );
       Navigator.pop(context, true);
     } catch (e) {
@@ -338,11 +390,25 @@ class _ComandaPageState extends State<ComandaPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Mesa ${widget.mesa['nombre']} · ${widget.zona}', style: titulo(24)),
+                    Text(widget.zona.isEmpty ? _titulo : '$_titulo · ${widget.zona}', style: titulo(24)),
                     Text(abierta, style: const TextStyle(color: C.gris, fontSize: 13)),
                   ],
                 ),
               ),
+              if (_pedido != null)
+                PopupMenuButton<String>(
+                  tooltip: 'Más acciones',
+                  icon: const Icon(Icons.more_vert),
+                  onSelected: _accion,
+                  itemBuilder: (_) => [
+                    if (widget.mesa != null)
+                      const PopupMenuItem(value: 'cambiar', child: ListTile(leading: Icon(Icons.swap_horiz), title: Text('Cambiar de mesa'))),
+                    if (widget.mesa != null)
+                      const PopupMenuItem(value: 'unir', child: ListTile(leading: Icon(Icons.merge_type), title: Text('Unir otra mesa'))),
+                    const PopupMenuItem(value: 'dividir', child: ListTile(leading: Icon(Icons.call_split), title: Text('Dividir cuenta'))),
+                  ],
+                ),
+              const SizedBox(width: 8),
               _Comensales(
                 valor: _pax,
                 onCambio: _pedido == null ? (v) => setState(() => _pax = v) : null,
@@ -465,7 +531,17 @@ class _ComandaPageState extends State<ComandaPage> {
                       children: [
                         Text('${(d['cantidad'] as num).toStringAsFixed(0)}× ',
                             style: const TextStyle(fontWeight: FontWeight.w700, color: C.gris)),
-                        Expanded(child: Text(d['descripcion'] as String, style: const TextStyle(color: C.gris))),
+                        Expanded(
+                          child: Text(
+                            d['estado_cocina'] == 'anulado'
+                                ? '${d['descripcion']} · ${d['anulado_motivo'] ?? 'anulado'}'
+                                : d['descripcion'] as String,
+                            style: TextStyle(
+                              color: C.gris,
+                              decoration: d['estado_cocina'] == 'anulado' ? TextDecoration.lineThrough : null,
+                            ),
+                          ),
+                        ),
                         if (d['estado_cocina'] == 'listo')
                           TextButton(onPressed: () => _servido(d), child: const Text('Listo · Servir'))
                         else
@@ -474,6 +550,15 @@ class _ComandaPageState extends State<ComandaPage> {
                                 ? 'En espera'
                                 : _estadosCocina[d['estado_cocina']] ?? '',
                             style: const TextStyle(fontSize: 12, color: C.gris),
+                          ),
+                        if (d['estado_cocina'] != 'anulado' && (Perfil.cache?.puede('anular') ?? false))
+                          IconButton(
+                            tooltip: 'Anular',
+                            visualDensity: VisualDensity.compact,
+                            icon: const Icon(Icons.close, size: 18),
+                            onPressed: () async {
+                              if (await anularLinea(context, d)) await _cargar();
+                            },
                           ),
                       ],
                     ),
@@ -496,9 +581,9 @@ class _ComandaPageState extends State<ComandaPage> {
                       label: const Text('Pide la cuenta'),
                     ),
                   ),
-                if (_pedido!['estado'] == 'abierto' && (Perfil.cache?.rol != Rol.cocinero))
+                if (_pedido!['estado'] == 'abierto' && (Perfil.cache?.puede('cobrar') ?? false))
                   const SizedBox(width: 8),
-                if (Perfil.cache?.rol != Rol.cocinero)
+                if (Perfil.cache?.puede('cobrar') ?? false)
                   Expanded(
                     child: FilledButton.icon(
                       style: FilledButton.styleFrom(backgroundColor: C.tinta),
@@ -556,7 +641,7 @@ class _ComandaPageState extends State<ComandaPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(l.producto['nombre'] as String, style: const TextStyle(fontWeight: FontWeight.w600)),
+                  Text(l.nombre, style: const TextStyle(fontWeight: FontWeight.w600)),
                   Text(l.nota.isEmpty ? 'Añadir nota' : l.nota,
                       style: TextStyle(fontSize: 12, color: l.nota.isEmpty ? C.gris : C.naranja)),
                 ],
@@ -686,10 +771,26 @@ class BotonProducto extends StatelessWidget {
                 children: [
                   Padding(
                     padding: EdgeInsets.only(right: cantidad > 0 ? 30 : 0),
-                    child: Text(producto['nombre'] as String,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15, height: 1.2)),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (producto['imagen_url'] != null) ...[
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.network(producto['imagen_url'] as String,
+                                width: 40, height: 40, fit: BoxFit.cover,
+                                errorBuilder: (_, _, _) => const SizedBox(width: 40, height: 40)),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
+                        Expanded(
+                          child: Text(producto['nombre'] as String,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15, height: 1.2)),
+                        ),
+                      ],
+                    ),
                   ),
                   const Spacer(),
                   if (al.isNotEmpty)

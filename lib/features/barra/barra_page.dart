@@ -2,17 +2,22 @@ import 'package:flutter/material.dart';
 
 import '../../core/tema.dart';
 import '../../main.dart';
+import '../../core/impresion.dart';
+import '../auth/perfil.dart';
 import '../caja/cobro_dialog.dart';
 import '../carta/colores.dart';
 import '../comanda/comanda_page.dart' show BotonProducto, ChipGrupo;
+import '../comanda/modificadores_picker.dart';
 import '../ticketbai/modelos.dart' show euros;
 import '../ticketbai/ticket_view.dart';
 
 class _Linea {
-  _Linea(this.producto);
+  _Linea(this.producto, [this.mods = const []]);
   final Map<String, dynamic> producto;
+  final List<Map<String, dynamic>> mods;
   double cantidad = 1;
-  double get precio => (producto['precio_venta'] as num).toDouble();
+  String get nombre => nombreConModificadores(producto, mods);
+  double get precio => precioConModificadores(producto, mods);
   double get total => cantidad * precio;
 }
 
@@ -49,7 +54,7 @@ class _BarraPageState extends State<BarraPage> {
     try {
       final r = await Future.wait([
         supabase.from('grupos_productos').select('id, nombre, color').eq('activo', true).order('orden').order('nombre'),
-        supabase.from('productos').select('id, grupo_id, area_id, nombre, precio_venta, alergenos').eq('activo', true).order('nombre'),
+        supabase.from('productos').select('id, grupo_id, area_id, nombre, precio_venta, alergenos, imagen_url, producto_modificadores(modificadores(id, nombre, precio, activo))').eq('activo', true).order('nombre'),
         supabase.from('areas_preparacion').select('id, nombre'),
       ]);
       _grupos = List<Map<String, dynamic>>.from(r[0]);
@@ -78,13 +83,16 @@ class _BarraPageState extends State<BarraPage> {
     }
   }
 
-  void _anadir(Map<String, dynamic> p) {
+  Future<void> _anadir(Map<String, dynamic> p) async {
+    final mods = await elegirModificadores(context, p);
+    if (mods == null || !mounted) return;
+    final clave = claveModificadores(mods);
     setState(() {
-      final l = _ronda.where((l) => l.producto['id'] == p['id']).firstOrNull;
+      final l = _ronda.where((l) => l.producto['id'] == p['id'] && claveModificadores(l.mods) == clave).firstOrNull;
       if (l != null) {
         l.cantidad++;
       } else {
-        _ronda.add(_Linea(p));
+        _ronda.add(_Linea(p, mods));
       }
     });
   }
@@ -114,7 +122,7 @@ class _BarraPageState extends State<BarraPage> {
             'pedido_id': id,
             'producto_id': l.producto['id'],
             'area_id': l.producto['area_id'],
-            'descripcion': l.producto['nombre'],
+            'descripcion': l.nombre,
             'cantidad': l.cantidad,
             'precio_unitario': l.precio,
             // Lo de cocina va a la pantalla; lo de barra se sirve al momento
@@ -122,6 +130,15 @@ class _BarraPageState extends State<BarraPage> {
             'curso': 'ya',
           },
       ]);
+      Impresion.imprimirComanda(
+        'Cocina',
+        _cuenta?['nombre_llevar'] as String? ?? nombre ?? 'Barra',
+        [
+          for (final l in _ronda)
+            if (_areas[l.producto['area_id']] == 'Cocina')
+              {'cantidad': l.cantidad.toStringAsFixed(0), 'descripcion': l.nombre, 'curso': 'ya'},
+        ],
+      ).ignore();
     }
     return id;
   }
@@ -147,10 +164,7 @@ class _BarraPageState extends State<BarraPage> {
         // Cobro cancelado: una venta rápida sin nombre no se queda abierta
         if (eraNueva) await supabase.from('pedidos').update({'estado': 'anulado'}).eq('id', id);
       } else if (mounted) {
-        await showDialog<void>(
-          context: context,
-          builder: (_) => Dialog(child: SingleChildScrollView(child: TicketView(factura: factura))),
-        );
+        await mostrarTicket(context, factura);
       }
       _ronda.clear();
       _cuenta = null;
@@ -373,7 +387,7 @@ class _BarraPageState extends State<BarraPage> {
                         onPressed: () => setState(() => l.cantidad++),
                         icon: const Icon(Icons.add_circle_outline),
                       ),
-                      Expanded(child: Text(l.producto['nombre'] as String, style: const TextStyle(fontWeight: FontWeight.w600))),
+                      Expanded(child: Text(l.nombre, style: const TextStyle(fontWeight: FontWeight.w600))),
                       Text(euros(l.total), style: const TextStyle(fontWeight: FontWeight.w700)),
                     ],
                   ),
@@ -410,7 +424,7 @@ class _BarraPageState extends State<BarraPage> {
                     child: SizedBox(
                       height: 60,
                       child: FilledButton.icon(
-                        onPressed: total <= 0 || _ocupado ? null : _cobrar,
+                        onPressed: total <= 0 || _ocupado || !(Perfil.cache?.puede('cobrar') ?? false) ? null : _cobrar,
                         icon: const Icon(Icons.point_of_sale),
                         label: Text('Cobrar', style: titulo(20, color: C.sobreAccion)),
                       ),

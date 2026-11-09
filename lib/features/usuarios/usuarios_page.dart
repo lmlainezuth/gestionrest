@@ -3,6 +3,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/tema.dart';
 import '../../main.dart';
+import '../../core/permisos.dart';
+import '../auth/perfil.dart';
 import '../auth/pin.dart';
 
 const _roles = {'admin': 'Administrador', 'camarero': 'Camarero', 'cocinero': 'Cocina'};
@@ -30,8 +32,7 @@ class _UsuariosPageState extends State<UsuariosPage> {
 
   Future<void> _cargar() async {
     try {
-      _perfiles = List<Map<String, dynamic>>.from(
-          await supabase.from('perfiles').select().order('activo').order('nombre'));
+      _perfiles = List<Map<String, dynamic>>.from(await supabase.rpc('equipo_empresa'));
       _error = null;
     } catch (e) {
       _error = '$e';
@@ -41,7 +42,8 @@ class _UsuariosPageState extends State<UsuariosPage> {
 
   Future<void> _actualizar(Map<String, dynamic> p, Map<String, dynamic> cambios) async {
     try {
-      await supabase.from('perfiles').update(cambios).eq('id', p['id']);
+      // Rol, activo y permisos son de esta empresa
+      await supabase.from('empresa_usuarios').update(cambios).eq('usuario_id', p['id']);
       await _cargar();
     } catch (e) {
       _avisar('No se pudo guardar: $e');
@@ -100,6 +102,39 @@ class _UsuariosPageState extends State<UsuariosPage> {
     if (clave == null) return;
     final error = await _funcion({'accion': 'pin', 'id': p['id'], 'pin': clave});
     _avisar(error ?? 'PIN cambiado');
+  }
+
+  Future<void> _permisos(Map<String, dynamic> p) async {
+    final rol = Rol.values.byName(p['rol'] as String);
+    final posibles = permisosPermitidos[rol]!;
+    final marcados = {...((p['permisos'] as List?)?.cast<String>() ?? permisosPorDefecto[rol]!)};
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          title: Text('Permisos de ${p['nombre']}'),
+          content: SizedBox(
+            width: 380,
+            child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
+              for (final k in posibles)
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(nombresPermiso[k] ?? k),
+                  value: marcados.contains(k),
+                  onChanged: (v) => setD(() => v == true ? marcados.add(k) : marcados.remove(k)),
+                ),
+            ])),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Guardar')),
+          ],
+        ),
+      ),
+    );
+    if (ok != true) return;
+    // Todos marcados = sin restricciones (null)
+    await _actualizar(p, {'permisos': marcados.toList()});
   }
 
   @override
@@ -178,6 +213,11 @@ class _UsuariosPageState extends State<UsuariosPage> {
               Switch(value: activo, onChanged: soyYo ? null : (v) => _actualizar(p, {'activo': v})),
               Text(activo ? 'Activo' : 'Inactivo', style: const TextStyle(fontSize: 11, color: C.gris)),
             ],
+          ),
+          IconButton(
+            tooltip: 'Permisos',
+            onPressed: soyYo ? null : () => _permisos(p),
+            icon: Icon(p['permisos'] == null ? Icons.lock_open_outlined : Icons.lock_person_outlined),
           ),
           IconButton(
             tooltip: 'Cambiar PIN',

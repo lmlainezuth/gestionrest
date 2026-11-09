@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/impresion.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
 import '../carta/colores.dart' show leerImporte;
@@ -230,6 +231,14 @@ class _CajaPageState extends State<CajaPage> {
               child: Text('${_caja!['nombre']} · abierta a las $hora · fondo ${euros(_turno!['efectivo_inicial'] as num)}',
                   style: const TextStyle(color: C.gris)),
             ),
+            OutlinedButton.icon(
+              onPressed: () => Impresion.abrirCajon().catchError((e) {
+                if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No se pudo abrir el cajón: $e')));
+              }),
+              icon: const Icon(Icons.point_of_sale),
+              label: const Text('Abrir cajón'),
+            ),
+            const SizedBox(width: 8),
             OutlinedButton.icon(onPressed: () => _movimiento('ingreso'), icon: const Icon(Icons.add), label: const Text('Ingreso')),
             const SizedBox(width: 8),
             OutlinedButton.icon(onPressed: () => _movimiento('gasto'), icon: const Icon(Icons.remove), label: const Text('Gasto')),

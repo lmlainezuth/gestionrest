@@ -17,6 +17,7 @@ class _MesasViewState extends State<MesasView> {
   late Future<List<Map<String, dynamic>>> _salones = _cargar();
   String? _salonId;
   Map<String, Map<String, dynamic>> _abiertos = {};
+  List<Map<String, dynamic>> _llevar = [];
 
   Future<List<Map<String, dynamic>>> _cargar() async {
     final filas = await supabase
@@ -26,13 +27,52 @@ class _MesasViewState extends State<MesasView> {
         .order('orden');
     final pedidos = await supabase
         .from('pedidos')
-        .select('mesa_id, total, creado_en, num_personas, estado')
+        .select('id, tipo, nombre_llevar, mesa_id, total, creado_en, num_personas, estado')
         .inFilter('estado', ['abierto', 'precuenta']);
     _abiertos = {
       for (final p in pedidos)
         if (p['mesa_id'] != null) p['mesa_id'] as String: p,
     };
+    _llevar = [for (final p in pedidos) if (p['tipo'] == 'llevar') p];
     return List<Map<String, dynamic>>.from(filas);
+  }
+
+  Future<void> _nuevoLlevar() async {
+    final ctrl = TextEditingController();
+    final nombre = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Para llevar'),
+        content: SizedBox(
+          width: 340,
+          child: TextField(
+            controller: ctrl,
+            autofocus: true,
+            textCapitalization: TextCapitalization.words,
+            decoration: const InputDecoration(labelText: 'Nombre para llamarle'),
+            onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('Tomar pedido')),
+        ],
+      ),
+    );
+    if (nombre == null || nombre.isEmpty || !mounted) return;
+    final cambio = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => ComandaPage(nombreLlevar: nombre)),
+    );
+    if (cambio == true) await _recargar();
+  }
+
+  Future<void> _abrirLlevar(Map<String, dynamic> p) async {
+    final cambio = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => ComandaPage(pedidoId: p['id'] as String)),
+    );
+    if (cambio == true) await _recargar();
   }
 
   Future<void> _abrir(Map<String, dynamic> mesa, String zona) async {
@@ -88,6 +128,26 @@ class _MesasViewState extends State<MesasView> {
                       detalle: _ocupacion(s),
                       activa: s['id'] == salon['id'],
                       onTap: () => setState(() => _salonId = s['id'] as String),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              // Para llevar
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: _nuevoLlevar,
+                    icon: const Icon(Icons.shopping_bag_outlined),
+                    label: const Text('Para llevar'),
+                  ),
+                  for (final p in _llevar)
+                    ActionChip(
+                      avatar: const Icon(Icons.shopping_bag, size: 18),
+                      label: Text('${p['nombre_llevar'] ?? 'Llevar'} · ${euros(p['total'] as num)}'),
+                      onPressed: () => _abrirLlevar(p),
                     ),
                 ],
               ),

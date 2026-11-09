@@ -26,8 +26,12 @@ Deno.serve(async (req) => {
   const jwt = (req.headers.get("Authorization") ?? "").replace("Bearer ", "");
   const { data: { user } } = await admin.auth.getUser(jwt);
   if (!user) return json({ error: "No has iniciado sesión" }, 401);
-  const { data: yo } = await admin.from("perfiles").select("rol, activo").eq("id", user.id).single();
-  if (yo?.rol !== "admin" || !yo.activo) return json({ error: "Solo el administrador puede hacer esto" }, 403);
+  // Debe ser administrador de su empresa actual
+  const { data: perfil } = await admin.from("perfiles").select("empresa_actual").eq("id", user.id).single();
+  const empresa = perfil?.empresa_actual;
+  const { data: yo } = await admin.from("empresa_usuarios").select("rol, activo")
+    .eq("empresa_id", empresa).eq("usuario_id", user.id).maybeSingle();
+  if (!empresa || yo?.rol !== "admin" || !yo.activo) return json({ error: "Solo el administrador puede hacer esto" }, 403);
 
   const b = await req.json();
   const pin = String(b.pin ?? "");
@@ -35,6 +39,9 @@ Deno.serve(async (req) => {
 
   // Cambiar el PIN de un usuario existente
   if (b.accion === "pin") {
+    const { data: miembro } = await admin.from("empresa_usuarios").select("usuario_id")
+      .eq("empresa_id", empresa).eq("usuario_id", String(b.id)).maybeSingle();
+    if (!miembro) return json({ error: "Ese usuario no es de tu empresa" }, 403);
     const { data: p } = await admin.from("perfiles").select("correo").eq("id", String(b.id)).single();
     if (!p?.correo) return json({ error: "Usuario no encontrado" }, 404);
     const { error } = await admin.auth.admin.updateUserById(String(b.id), {
@@ -58,6 +65,7 @@ Deno.serve(async (req) => {
   });
   if (error) return json({ error: error.message }, 400);
 
-  await admin.from("perfiles").update({ nombre, rol, activo: true }).eq("id", data.user.id);
+  await admin.from("perfiles").update({ nombre, empresa_actual: empresa }).eq("id", data.user.id);
+  await admin.from("empresa_usuarios").insert({ empresa_id: empresa, usuario_id: data.user.id, rol, activo: true });
   return json({ id: data.user.id });
 });

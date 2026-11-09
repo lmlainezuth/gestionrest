@@ -46,3 +46,12 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Datos reales del negocio y ficheros sensibles: no subir
+supabase/datos/
+*.bak
+*.apk
+*.jks
+*.keystore
+*clave*
+flutter_01.png

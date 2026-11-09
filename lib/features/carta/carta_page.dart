@@ -6,6 +6,7 @@ import '../ticketbai/modelos.dart' show euros;
 import 'alergenos.dart';
 import 'colores.dart';
 import 'grupo_dialog.dart';
+import 'modificadores_dialog.dart';
 import 'producto_dialog.dart';
 
 /// Gestión de la carta: grupos a la izquierda, productos del grupo a la derecha.
@@ -115,6 +116,11 @@ class _CartaPageState extends State<CartaPage> {
                   children: [
                     Expanded(child: Text('Grupos', style: tema.textTheme.titleLarge)),
                     IconButton(
+                      tooltip: 'Modificadores (extras)',
+                      icon: const Icon(Icons.tune),
+                      onPressed: () => showDialog<bool>(context: context, builder: (_) => const ModificadoresDialog()),
+                    ),
+                    IconButton(
                       tooltip: 'Nuevo grupo',
                       icon: const Icon(Icons.add),
                       onPressed: () => _abrirGrupo(),
@@ -184,7 +190,7 @@ class _CartaPageState extends State<CartaPage> {
                               maxCrossAxisExtent: 240,
                               mainAxisSpacing: 12,
                               crossAxisSpacing: 12,
-                              childAspectRatio: 1.35,
+                              childAspectRatio: 1.05,
                               padding: const EdgeInsets.all(20),
                               children: [for (final p in _productos) _tarjeta(p, grupo)],
                             ),
@@ -216,6 +222,15 @@ class _CartaPageState extends State<CartaPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (p['imagen_url'] != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.network(p['imagen_url'] as String, height: 44, width: 44, fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => const SizedBox.shrink()),
+                    ),
+                  ),
                 Text(p['nombre'] as String,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,

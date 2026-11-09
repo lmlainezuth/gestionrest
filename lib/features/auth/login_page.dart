@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/tema.dart';
 import '../../main.dart';
+import '../../core/empresa_dispositivo.dart';
 import 'pin.dart';
 
 /// Entrada: eliges tu nombre y marcas tu PIN. El correo queda como opción.
@@ -30,7 +31,10 @@ class _LoginPageState extends State<LoginPage> {
 
   Future<void> _cargarEquipo() async {
     try {
-      _equipo = List<Map<String, dynamic>>.from(await supabase.rpc('equipo_login'));
+      final empresa = await EmpresaDispositivo.leer();
+      _equipo = empresa == null
+          ? []
+          : List<Map<String, dynamic>>.from(await supabase.rpc('equipo_login', params: {'p_empresa': empresa}));
     } catch (_) {
       _equipo = [];
     }

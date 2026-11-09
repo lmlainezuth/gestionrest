@@ -3,7 +3,11 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../main.dart';
 import 'alergenos.dart';
+import 'package:file_picker/file_picker.dart';
+
+import '../ticketbai/modelos.dart' show euros;
 import 'colores.dart';
+import 'modificadores_dialog.dart';
 
 /// Crear o editar un producto. Devuelve true si se guardó.
 class ProductoDialog extends StatefulWidget {
@@ -34,9 +38,58 @@ class _ProductoDialogState extends State<ProductoDialog> {
   late bool _activo = (p?['activo'] as bool?) ?? true;
   String? _error;
   bool _guardando = false;
+  late String? _imagen = p?['imagen_url'] as String?;
+  bool _subiendo = false;
+  List<Map<String, dynamic>> _mods = [];
+  final Set<String> _modsSel = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _cargarMods();
+  }
+
+  Future<void> _cargarMods() async {
+    final mods = await supabase.from('modificadores').select().eq('activo', true).order('nombre');
+    if (p != null) {
+      final sel = await supabase.from('producto_modificadores').select('modificador_id').eq('producto_id', p!['id']);
+      _modsSel.addAll(sel.map((r) => r['modificador_id'] as String));
+    }
+    if (mounted) setState(() => _mods = List<Map<String, dynamic>>.from(mods));
+  }
+
+  Future<void> _elegirImagen() async {
+    final f = await FilePicker.pickFile();
+    if (f == null) return;
+    final ext = (f.extension ?? '').toLowerCase();
+    if (!['jpg', 'jpeg', 'png', 'webp', 'gif'].contains(ext)) {
+      setState(() => _error = 'Elige una imagen (jpg, png, webp o gif)');
+      return;
+    }
+    setState(() => _subiendo = true);
+    try {
+      final bytes = await f.readAsBytes();
+      final ruta = '${DateTime.now().microsecondsSinceEpoch}.$ext';
+      await supabase.storage.from('productos').uploadBinary(ruta, bytes,
+          fileOptions: FileOptions(contentType: 'image/${ext == 'jpg' ? 'jpeg' : ext}'));
+      setState(() => _imagen = supabase.storage.from('productos').getPublicUrl(ruta));
+    } catch (e) {
+      setState(() => _error = 'No se pudo subir la imagen: $e');
+    }
+    if (mounted) setState(() => _subiendo = false);
+  }
 
   static String _fmt(Object? v) =>
       v == null ? '' : (v as num).toStringAsFixed(2).replaceAll('.', ',');
+
+  Future<void> _guardarMods(String productoId) async {
+    await supabase.from('producto_modificadores').delete().eq('producto_id', productoId);
+    if (_modsSel.isNotEmpty) {
+      await supabase.from('producto_modificadores').insert([
+        for (final m in _modsSel) {'producto_id': productoId, 'modificador_id': m},
+      ]);
+    }
+  }
 
   Future<void> _guardar() async {
     if (!_form.currentState!.validate()) return;
@@ -50,12 +103,15 @@ class _ProductoDialogState extends State<ProductoDialog> {
       'precio_compra': leerImporte(_compra.text) ?? 0,
       'alergenos': _alergenos.toList(),
       'activo': _activo,
+      'imagen_url': _imagen,
     };
     try {
       if (p == null) {
-        await supabase.from('productos').insert(datos);
+        final nuevo = await supabase.from('productos').insert(datos).select('id').single();
+        await _guardarMods(nuevo['id'] as String);
       } else {
         await supabase.from('productos').update(datos).eq('id', p!['id']);
+        await _guardarMods(p!['id'] as String);
       }
       if (mounted) Navigator.pop(context, true);
     } on PostgrestException catch (e) {
@@ -148,6 +204,52 @@ class _ProductoDialogState extends State<ProductoDialog> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 16),
+                Row(children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      width: 72,
+                      height: 72,
+                      color: const Color(0xFFEFEAE0),
+                      child: _imagen == null
+                          ? const Icon(Icons.image_outlined, color: Colors.black38)
+                          : Image.network(_imagen!, fit: BoxFit.cover,
+                              errorBuilder: (_, _, _) => const Icon(Icons.broken_image_outlined)),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  OutlinedButton.icon(
+                    onPressed: _subiendo ? null : _elegirImagen,
+                    icon: const Icon(Icons.upload_outlined),
+                    label: Text(_subiendo ? 'Subiendo…' : (_imagen == null ? 'Añadir imagen' : 'Cambiar imagen')),
+                  ),
+                  if (_imagen != null)
+                    TextButton(onPressed: () => setState(() => _imagen = null), child: const Text('Quitar')),
+                ]),
+                const SizedBox(height: 16),
+                Row(children: [
+                  const Text('Extras y cambios'),
+                  const Spacer(),
+                  TextButton(
+                    onPressed: () async {
+                      await showDialog<bool>(context: context, builder: (_) => const ModificadoresDialog());
+                      await _cargarMods();
+                    },
+                    child: const Text('Gestionar'),
+                  ),
+                ]),
+                if (_mods.isEmpty)
+                  const Text('Sin modificadores creados.', style: TextStyle(fontSize: 13, color: Colors.black54))
+                else
+                  Wrap(spacing: 6, runSpacing: 6, children: [
+                    for (final m in _mods)
+                      FilterChip(
+                        label: Text((m['precio'] as num) > 0 ? '${m['nombre']} +${euros(m['precio'] as num)}' : '${m['nombre']}'),
+                        selected: _modsSel.contains(m['id']),
+                        onSelected: (s) => setState(() => s ? _modsSel.add(m['id'] as String) : _modsSel.remove(m['id'])),
+                      ),
+                  ]),
                 const SizedBox(height: 16),
                 const Text('Alérgenos'),
                 const SizedBox(height: 8),

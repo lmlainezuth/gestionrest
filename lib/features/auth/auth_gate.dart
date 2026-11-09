@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/empresa_dispositivo.dart';
+import '../../core/tema.dart';
 import '../../main.dart';
 import '../admin/admin_home.dart';
 import '../camarero/camarero_home.dart';
@@ -8,9 +10,35 @@ import '../cocina/cocina_home.dart';
 import 'login_page.dart';
 import 'perfil.dart';
 
-/// Decide qué pantalla mostrar: login, cuenta pendiente o la del rol.
+/// Elige empresa si hace falta y abre la pantalla según el rol y permisos.
 class AuthGate extends StatelessWidget {
   const AuthGate({super.key});
+
+  /// Secciones que se ven en el panel completo (no solo mesas y barra).
+  static const _panel = [
+    'carta', 'caja', 'facturas', 'informes', 'usuarios', 'ajustes',
+    'caja_diaria', 'gastos', 'proveedores', 'resumen',
+  ];
+
+  Future<(Perfil?, List<Map<String, dynamic>>)> _preparar() async {
+    var perfil = await Perfil.actual();
+    if (perfil == null) return (null, <Map<String, dynamic>>[]);
+    // La empresa de este equipo manda, si el usuario pertenece a ella
+    final disp = await EmpresaDispositivo.leer();
+    if (disp != null && perfil.empresaId != disp) {
+      if (await supabase.rpc('usar_empresa', params: {'p_empresa': disp}) == true) {
+        perfil = await Perfil.actual();
+      }
+    }
+    if (perfil!.empresaId == null || !perfil.activo) {
+      final empresas = List<Map<String, dynamic>>.from(await supabase.rpc('mis_empresas'));
+      if (empresas.length != 1) return (perfil, empresas);
+      await supabase.rpc('usar_empresa', params: {'p_empresa': empresas.first['id']});
+      perfil = await Perfil.actual();
+    }
+    if (perfil?.empresaId != null) await EmpresaDispositivo.guardar(perfil!.empresaId!);
+    return (perfil, <Map<String, dynamic>>[]);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -18,33 +46,73 @@ class AuthGate extends StatelessWidget {
       stream: supabase.auth.onAuthStateChange,
       builder: (context, _) {
         if (supabase.auth.currentSession == null) return const LoginPage();
-        return FutureBuilder<Perfil?>(
-          key: ValueKey(supabase.auth.currentUser?.id),
-          future: Perfil.actual(),
-          builder: (context, snap) {
-            if (snap.connectionState != ConnectionState.done) {
-              return const Scaffold(
-                body: Center(child: CircularProgressIndicator()),
-              );
-            }
-            if (snap.hasError) {
-              return _Aviso('No se pudo cargar tu perfil:\n${snap.error}');
-            }
-            final perfil = snap.data;
-            if (perfil == null || !perfil.activo) {
-              return const _Aviso(
-                'Tu cuenta está pendiente de activación.\n'
-                'Pide al administrador que te asigne un rol.',
-              );
-            }
-            return switch (perfil.rol) {
-              Rol.admin => AdminHome(perfil: perfil),
-              Rol.camarero => CamareroHome(perfil: perfil),
-              Rol.cocinero => CocinaHome(perfil: perfil),
-            };
-          },
+        return ValueListenableBuilder<int>(
+          valueListenable: recargaApp,
+          builder: (context, v, _) => FutureBuilder<(Perfil?, List<Map<String, dynamic>>)>(
+            key: ValueKey('${supabase.auth.currentUser?.id}-$v'),
+            future: _preparar(),
+            builder: (context, snap) {
+              if (snap.connectionState != ConnectionState.done) {
+                return const Scaffold(body: Center(child: CircularProgressIndicator()));
+              }
+              if (snap.hasError) return _Aviso('No se pudo cargar tu perfil:\n${snap.error}');
+              final (perfil, empresas) = snap.data!;
+              if (perfil == null) return const _Aviso('No se encontró tu perfil.');
+              if (perfil.empresaId == null || !perfil.activo) {
+                return empresas.isEmpty
+                    ? const _Aviso('Tu cuenta no tiene acceso a ninguna empresa.\nPide al administrador que te dé acceso.')
+                    : _ElegirEmpresa(empresas: empresas);
+              }
+              if (perfil.rol == Rol.cocinero) return CocinaHome(perfil: perfil);
+              if (perfil.esAdmin || _panel.any(perfil.puede)) return AdminHome(perfil: perfil);
+              return CamareroHome(perfil: perfil);
+            },
+          ),
         );
       },
+    );
+  }
+}
+
+class _ElegirEmpresa extends StatelessWidget {
+  const _ElegirEmpresa({required this.empresas});
+  final List<Map<String, dynamic>> empresas;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('¿Con qué empresa trabajas?', style: titulo(28)),
+                const SizedBox(height: 6),
+                const Text('Este equipo la recordará.', style: TextStyle(color: C.gris)),
+                const SizedBox(height: 20),
+                for (final e in empresas)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: OutlinedButton(
+                      style: OutlinedButton.styleFrom(minimumSize: const Size(0, 64)),
+                      onPressed: () async {
+                        await supabase.rpc('usar_empresa', params: {'p_empresa': e['id']});
+                        await EmpresaDispositivo.guardar(e['id'] as String);
+                        recargaApp.value++;
+                      },
+                      child: Text(e['nombre'] as String, style: titulo(20)),
+                    ),
+                  ),
+                TextButton(onPressed: () => supabase.auth.signOut(), child: const Text('Cerrar sesión')),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -64,10 +132,7 @@ class _Aviso extends StatelessWidget {
             children: [
               Text(texto, textAlign: TextAlign.center),
               const SizedBox(height: 16),
-              FilledButton(
-                onPressed: () => supabase.auth.signOut(),
-                child: const Text('Cerrar sesión'),
-              ),
+              FilledButton(onPressed: () => supabase.auth.signOut(), child: const Text('Cerrar sesión')),
             ],
           ),
         ),

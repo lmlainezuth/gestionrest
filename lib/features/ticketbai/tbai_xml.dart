@@ -17,6 +17,7 @@ class TbaiXml {
     required String nifDesarrollador,
     required String nombreSoftware,
     required String versionSoftware,
+    Map<String, dynamic>? cliente,
   }) {
     String n2(double v) => v.toStringAsFixed(2);
     String dos(int v) => v.toString().padLeft(2, '0');
@@ -31,13 +32,24 @@ class TbaiXml {
       ..write('<Sujetos><Emisor>')
       ..write('<NIF>${_e(nifEmisor)}</NIF>')
       ..write('<ApellidosNombreRazonSocial>${_e(razonSocial)}</ApellidosNombreRazonSocial>')
-      ..write('</Emisor><EmitidaPorTercerosODestinatario>N</EmitidaPorTercerosODestinatario></Sujetos>')
+      ..write('</Emisor>');
+    if (cliente != null) {
+      b
+        ..write('<Destinatarios><IDDestinatario>')
+        ..write('<NIF>${_e(cliente['documento'] as String)}</NIF>')
+        ..write('<ApellidosNombreRazonSocial>${_e(cliente['nombre'] as String)}</ApellidosNombreRazonSocial>');
+      final dir = cliente['direccion'] as String?;
+      if (dir != null && dir.isNotEmpty) b.write('<Direccion>${_e(dir)}</Direccion>');
+      b.write('</IDDestinatario></Destinatarios>');
+    }
+    b
+      ..write('<EmitidaPorTercerosODestinatario>N</EmitidaPorTercerosODestinatario></Sujetos>')
       ..write('<Factura><CabeceraFactura>')
       ..write('<SerieFactura>${_e(serie)}</SerieFactura>')
       ..write('<NumFactura>$numero</NumFactura>')
       ..write('<FechaExpedicionFactura>${f(fecha)}</FechaExpedicionFactura>')
       ..write('<HoraExpedicionFactura>${h(fecha)}</HoraExpedicionFactura>')
-      ..write('<FacturaSimplificada>S</FacturaSimplificada>')
+      ..write('<FacturaSimplificada>${cliente == null ? 'S' : 'N'}</FacturaSimplificada>')
       ..write('</CabeceraFactura><DatosFactura>')
       ..write('<DescripcionFactura>Servicio de restauración</DescripcionFactura>')
       ..write('<DetallesFactura>');

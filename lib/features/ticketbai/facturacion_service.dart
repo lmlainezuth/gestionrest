@@ -13,12 +13,13 @@ class FacturacionService {
     required List<LineaFactura> lineas,
     String? pedidoId,
     String? cajaId,
+    Map<String, dynamic>? cliente, // con NIF: factura completa
   }) async {
     final config = await supabase.from('tbai_config').select().limit(1).single();
     final caja = cajaId == null
         ? await supabase.from('cajas').select('id, serie_factura').limit(1).single()
         : await supabase.from('cajas').select('id, serie_factura').eq('id', cajaId).single();
-    final serie = caja['serie_factura'] as String;
+    final serie = '${caja['serie_factura']}${cliente == null ? '' : 'F'}';
     final proveedor = proveedorPara(config['entorno'] as String);
     final desglose = Desglose.de(lineas, (config['tipo_iva'] as num).toDouble());
 
@@ -51,6 +52,7 @@ class FacturacionService {
         nifDesarrollador: (config['nif_desarrollador'] as String?) ?? config['nif'] as String,
         nombreSoftware: config['nombre_software'] as String,
         versionSoftware: config['version_software'] as String,
+        cliente: cliente,
       );
       final firma = await proveedor.firmar(xml);
       final id = TbaiCodigos.identificador(
@@ -72,6 +74,10 @@ class FacturacionService {
           'serie': serie,
           'numero': numero,
           'fecha': fecha.toUtc().toIso8601String(),
+          'tipo': cliente == null ? 'simplificada' : 'completa',
+          'cliente_nif': cliente?['documento'],
+          'cliente_nombre': cliente?['nombre'],
+          'cliente_direccion': cliente?['direccion'],
           'nif_emisor': config['nif'],
           'razon_social_emisor': config['razon_social'],
           'lineas': lineas.map((l) => l.toMap()).toList(),
