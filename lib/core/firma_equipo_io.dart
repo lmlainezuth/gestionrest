@@ -33,9 +33,7 @@ class FirmaEquipo {
         caduca: DateTime.fromMillisecondsSinceEpoch(r['caduca'] as int),
       );
     } else {
-      debugPrint('[firma] leyendo certificado…');
       final out = await _powershell('cert', p12, clave, const []);
-      debugPrint('[firma] certificado leído');
       final partes = out.split('|');
       c = (der: partes[0], titular: partes[1], caduca: DateTime.parse(partes[2]));
     }
@@ -50,31 +48,24 @@ class FirmaEquipo {
           {'p12': Uint8List.fromList(p12), 'clave': clave, 'datos': Uint8List.fromList(datos)});
       return r as Uint8List;
     }
-    final sw = Stopwatch()..start();
     // Rápido: clave en memoria y firma en Dart (sin abrir PowerShell en cada ticket)
     if (_rsaFallo != _huella(p12, clave)) try {
       final k = await _clave(p12, clave);
       final f = _firmarDart(k, datos);
-      debugPrint('[firma] en memoria ${sw.elapsedMilliseconds} ms');
       return f;
-    } catch (e) {
+    } catch (_) {
       _rsaFallo = _huella(p12, clave); // no se reintenta en cada ticket
-      debugPrint('[firma] en memoria no disponible: $e');
     }
     if (!_usarServidor) {
       final f = await _powershell('firmar', p12, clave, datos);
-      debugPrint('[firma] powershell ${sw.elapsedMilliseconds} ms');
       return base64.decode(f);
     }
     try {
       final f = await _Servidor.firmar(_huella(p12, clave), p12, clave, datos);
-      debugPrint('[firma] servidor ${sw.elapsedMilliseconds} ms');
       return base64.decode(f);
-    } catch (e) {
+    } catch (_) {
       // Si el firmador rápido falla, el método de siempre (lento pero seguro)
-      debugPrint('[firma] servidor falló en ${sw.elapsedMilliseconds} ms: $e');
       final f = await _powershell('firmar', p12, clave, datos);
-      debugPrint('[firma] método lento ${sw.elapsedMilliseconds} ms');
       return base64.decode(f);
     }
   }
@@ -94,7 +85,6 @@ class FirmaEquipo {
     if (_rsa != null && _rsaHuella == h) return _rsa!;
     if (_cargandoRsa != null) return _cargandoRsa!;
     _cargandoRsa = () async {
-      final sw = Stopwatch()..start();
       final partes = (await _powershell('clave', p12, clave, const [])).split('|');
       final k = RSAPrivateKey(_big(partes[0]), _big(partes[2]), _big(partes[3]), _big(partes[4]));
       // Comprobación: lo firmado tiene que verificarse con la clave pública
@@ -107,7 +97,6 @@ class FirmaEquipo {
       }
       _rsa = k;
       _rsaHuella = h;
-      debugPrint('[firma] clave cargada en ${sw.elapsedMilliseconds} ms');
       return k;
     }();
     try {

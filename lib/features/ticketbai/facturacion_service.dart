@@ -48,7 +48,6 @@ class FacturacionService {
           ? supabase.from('cajas').select('id, serie_factura').limit(1).single()
           : supabase.from('cajas').select('id, serie_factura').eq('id', cajaId).single(),
     ]);
-    debugPrint('[emitir] config y caja');
     final config = r0[0];
     comprobarConfig(config);
     final caja = r0[1];
@@ -64,7 +63,6 @@ class FacturacionService {
             '${VentaOffline.ultimoError == null ? '' : ': ${VentaOffline.ultimoError}'}');
       }
     }
-    debugPrint('[emitir] serie equipo: $equipo');
     final cadena = equipo ?? caja['serie_factura'] as String;
     final serie = '$cadena${rectificativa ? 'R' : cliente == null ? '' : 'F'}';
     final proveedor = proveedorPara(config['entorno'] as String);
@@ -83,7 +81,6 @@ class FacturacionService {
       final previa = ultimas.isEmpty ? null : ultimas.first;
       final ultimaSerie = r1[1] as Map<String, dynamic>?;
       final numero = ((ultimaSerie?['numero'] as int?) ?? 0) + 1;
-      debugPrint('[emitir] numerada');
       final fila = await prepararFactura(
         config: config,
         firmar: proveedor.firmar,
@@ -100,7 +97,6 @@ class FacturacionService {
         sustituyeSimplificada: sustituyeSimplificada,
       );
 
-      debugPrint('[emitir] firmada');
       try {
         final factura = await supabase
             .from('facturas')
@@ -205,6 +201,7 @@ class FacturacionService {
       serie: serie,
       numero: numero,
       importeTotal: desglose.total,
+      base: TbaiCodigos.baseQr(config['entorno'] as String?),
     );
     return {
       'pedido_id': pedidoId,

@@ -68,3 +68,7 @@ test/salida/
 # Datos personales del desarrollador (NIF) y notas locales
 lib/core/software_privado.dart
 Claude outputs/
+
+# APK firmados archivados (art. 9.4) y configuracion local de SimplySign
+versiones-apk/
+herramientas/simplysign.cfg

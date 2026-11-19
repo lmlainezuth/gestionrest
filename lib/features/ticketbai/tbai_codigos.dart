@@ -3,6 +3,10 @@ import 'crc8.dart';
 /// Códigos impresos en la factura: identificador TBAI y URL del QR.
 class TbaiCodigos {
   static const urlQrProduccion = 'https://tbai.egoitza.gipuzkoa.eus/qr/';
+  static const urlQrPruebas = 'https://tbai.prep.gipuzkoa.eus/qr/';
+
+  /// En pruebas el QR lleva a la comprobación de pruebas; si no, Hacienda no encuentra el ticket.
+  static String baseQr(String? entorno) => entorno == 'produccion' ? urlQrProduccion : urlQrPruebas;
 
   /// TBAI-NIF(9)-DDMMAA-13 primeros caracteres de la firma-CRC  (39 caracteres)
   static String identificador({
