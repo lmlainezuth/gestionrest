@@ -324,7 +324,7 @@ class _NuevoUsuarioState extends State<_NuevoUsuario> {
             ),
             if (_rol == 'gestion') ...[
               const SizedBox(height: 8),
-              const Text('Solo verá Caja por días, Gastos, Proveedores y Números. Ideal para la tablet de la oficina.',
+              const Text('Caja por días, cierres y descuadres, gastos, proveedores, stock y pedidos, facturas emitidas (solo ver), ventas, márgenes e IVA trimestral. No cobra ni toca la carta ni los ajustes. Ideal para la oficina o el gestor.',
                   style: TextStyle(fontSize: 12, color: Colors.black54)),
             ],
             if (_error != null) ...[

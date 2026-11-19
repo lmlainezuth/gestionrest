@@ -64,3 +64,7 @@ flutter_01.png
 
 # Salida de los tests de firma
 test/salida/
+
+# Datos personales del desarrollador (NIF) y notas locales
+lib/core/software_privado.dart
+Claude outputs/

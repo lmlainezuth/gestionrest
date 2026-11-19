@@ -11,8 +11,26 @@ import 'login_page.dart';
 import 'perfil.dart';
 
 /// Elige empresa si hace falta y abre la pantalla según el rol y permisos.
-class AuthGate extends StatelessWidget {
+class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
+
+  @override
+  State<AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<AuthGate> {
+  // La carga del perfil se hace UNA vez por usuario (y al pedir recarga). Antes se repetía en
+  // cada aviso de sesión (inicio, renovación del token...) y se veían dos cargas seguidas.
+  Future<(Perfil?, List<Map<String, dynamic>>)>? _futuro;
+  String? _claveFuturo;
+
+  Future<(Perfil?, List<Map<String, dynamic>>)> _futuroPara(String clave) {
+    if (_futuro == null || _claveFuturo != clave) {
+      _claveFuturo = clave;
+      _futuro = _preparar();
+    }
+    return _futuro!;
+  }
 
   /// Secciones que se ven en el panel completo (no solo mesas y barra).
   static const _panel = [
@@ -50,7 +68,7 @@ class AuthGate extends StatelessWidget {
           valueListenable: recargaApp,
           builder: (context, v, _) => FutureBuilder<(Perfil?, List<Map<String, dynamic>>)>(
             key: ValueKey('${supabase.auth.currentUser?.id}-$v'),
-            future: _preparar(),
+            future: _futuroPara('${supabase.auth.currentUser?.id}-$v'),
             builder: (context, snap) {
               if (snap.connectionState != ConnectionState.done) {
                 return const Scaffold(body: Center(child: CircularProgressIndicator()));

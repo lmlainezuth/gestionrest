@@ -7,6 +7,7 @@ import '../../core/empresa_dispositivo.dart';
 import '../fichajes/fichar_dialog.dart';
 import '../fichajes/fichajes_comun.dart' show FichajeService;
 import 'pin.dart';
+import '../ticketbai/verificacion_presencial.dart';
 
 /// Entrada: eliges tu nombre y marcas tu PIN. El correo queda como opción.
 class LoginPage extends StatefulWidget {
@@ -97,11 +98,11 @@ class _LoginPageState extends State<LoginPage> {
           constraints: const BoxConstraints(maxWidth: 460),
           child: _cargando
               ? const CircularProgressIndicator()
-              : _modoCorreo || _equipo.isEmpty
-                  ? _FormularioCorreo(
-                      volver: _equipo.isEmpty ? null : () => setState(() => _modoCorreo = false),
-                    )
-                  : _elegido == null
+              : _modoCorreo
+                  ? _FormularioCorreo(volver: () => setState(() => _modoCorreo = false))
+                  : _equipo.isEmpty
+                      ? _sinConfigurar(ancho)
+                      : _elegido == null
                       ? _quienEres(ancho)
                       : _tecladoPin(),
         ),
@@ -113,7 +114,7 @@ class _LoginPageState extends State<LoginPage> {
           ? contenido
           : Row(
               children: [
-                Expanded(flex: 5, child: _PanelMarca()),
+                Expanded(flex: 5, child: _PanelMarca(onTapMarca: _toqueMarca)),
                 Expanded(flex: 4, child: contenido),
               ],
             ),
@@ -125,7 +126,7 @@ class _LoginPageState extends State<LoginPage> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (ancho < 900) ...[const _Marca(oscura: false), const SizedBox(height: 32)],
+        if (ancho < 900) ...[_Marca(oscura: false, onTap: _toqueMarca), const SizedBox(height: 32)],
         Text('¿Quién eres?', style: titulo(32)),
         const SizedBox(height: 6),
         const Text('Toca tu nombre y marca tu PIN.', style: TextStyle(color: C.gris)),
@@ -146,16 +147,38 @@ class _LoginPageState extends State<LoginPage> {
           ],
         ),
         const SizedBox(height: 24),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: TextButton(
-            onPressed: () => setState(() => _modoCorreo = true),
-            child: const Text('Entrar con correo (administración)'),
-          ),
-        ),
+        const Align(alignment: Alignment.centerLeft, child: BotonVerificacionTbai()),
       ],
     );
   }
+
+  // Acceso de administración oculto: 8 toques seguidos en "GestiónRest" (sin pausas de más de 3 s)
+  int _toques = 0;
+  DateTime _ultimoToque = DateTime(2000);
+
+  void _toqueMarca() {
+    final ahora = DateTime.now();
+    if (ahora.difference(_ultimoToque) > const Duration(seconds: 3)) _toques = 0;
+    _ultimoToque = ahora;
+    if (++_toques >= 8) {
+      _toques = 0;
+      setState(() => _modoCorreo = true);
+    }
+  }
+
+  /// Equipo nuevo (sin empresa): no se ofrece el acceso con correo a la vista.
+  Widget _sinConfigurar(double ancho) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (ancho < 900) ...[_Marca(oscura: false, onTap: _toqueMarca), const SizedBox(height: 32)],
+          Text('Equipo sin configurar', style: titulo(28)),
+          const SizedBox(height: 6),
+          const Text('Pide al encargado que lo prepare.', style: TextStyle(color: C.gris)),
+          const SizedBox(height: 24),
+          const BotonVerificacionTbai(),
+        ],
+      );
 
   Widget _tecladoPin() {
     final nombre = _elegido!['nombre'] as String;
@@ -377,6 +400,9 @@ class _FormularioCorreoState extends State<_FormularioCorreo> {
 }
 
 class _PanelMarca extends StatelessWidget {
+  const _PanelMarca({required this.onTapMarca});
+  final VoidCallback onTapMarca;
+
   @override
   Widget build(BuildContext context) => Container(
         color: C.panel,
@@ -384,7 +410,7 @@ class _PanelMarca extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const _Marca(oscura: true),
+            _Marca(oscura: true, onTap: onTapMarca),
             const Spacer(),
             Text('Comandas, cocina y caja\nen un solo sistema.', style: titulo(44, color: Colors.white)),
             const SizedBox(height: 20),
@@ -399,11 +425,16 @@ class _PanelMarca extends StatelessWidget {
 }
 
 class _Marca extends StatelessWidget {
-  const _Marca({required this.oscura});
+  const _Marca({required this.oscura, this.onTap});
   final bool oscura;
+  final VoidCallback? onTap;
 
   @override
-  Widget build(BuildContext context) => Row(
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
           Container(
             width: 44,
@@ -415,5 +446,6 @@ class _Marca extends StatelessWidget {
           const SizedBox(width: 12),
           Text('GestiónRest', style: titulo(24, color: oscura ? Colors.white : C.tinta)),
         ],
+        ),
       );
 }

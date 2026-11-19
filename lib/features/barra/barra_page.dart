@@ -7,12 +7,16 @@ import '../../core/tema.dart';
 import '../../main.dart';
 import '../../core/impresion.dart';
 import '../auth/perfil.dart';
+import '../caja/abrir_caja.dart';
+import '../caja/caja_service.dart';
 import '../caja/cobro_dialog.dart';
 import '../carta/colores.dart';
 import '../comanda/comanda_page.dart' show BotonProducto, ChipGrupo;
 import '../comanda/modificadores_picker.dart';
 import '../ticketbai/modelos.dart' show euros;
 import '../ticketbai/ticket_view.dart';
+import '../ticketbai/ventas_hoy.dart';
+import '../ticketbai/tbai_proveedor.dart' show precalentarFirma;
 import '../ticketbai/envios_pendientes.dart';
 import 'venta_offline.dart';
 
@@ -53,11 +57,13 @@ class _BarraPageState extends State<BarraPage> {
   List<Map<String, dynamic>> _cuentas = [];
   Map<String, dynamic>? _cuenta; // cuenta abierta seleccionada
   final List<_Linea> _ronda = [];
+  bool _cajaAbierta = true; // se comprueba al cargar (con internet)
 
   @override
   void initState() {
     super.initState();
     Conexion.enLinea.addListener(_alCambiarConexion);
+    precalentarFirma();
     _cargar();
   }
 
@@ -92,6 +98,7 @@ class _BarraPageState extends State<BarraPage> {
       _areas = {for (final a in r[2]) a['id'] as String: a['nombre'] as String};
       _grupoId ??= _grupos.isEmpty ? null : _grupos.first['id'] as String;
       await _cargarCuentas();
+      if (!_modoMesa) await _comprobarCaja();
       _error = null;
       _sinConexion = false;
       // Copia para poder vender si se cae internet
@@ -115,6 +122,23 @@ class _BarraPageState extends State<BarraPage> {
   }
 
   bool get _modoMesa => widget.mesa != null;
+
+  Future<void> _comprobarCaja() async {
+    try {
+      final caja = await CajaService.caja();
+      _cajaAbierta = await CajaService.turnoAbierto(caja['id'] as String) != null;
+    } catch (_) {
+      _cajaAbierta = true; // si no se puede comprobar, no se molesta
+    }
+  }
+
+  Future<void> _abrirCaja() async {
+    try {
+      if (await abrirCajaRapida(context)) setState(() => _cajaAbierta = true);
+    } catch (e) {
+      _avisar('No se pudo abrir la caja: $e');
+    }
+  }
 
   Future<void> _cargarCuentas() async {
     if (_modoMesa) {
@@ -243,11 +267,12 @@ class _BarraPageState extends State<BarraPage> {
         // Cobro cancelado: una venta rápida sin nombre no se queda abierta
         if (eraNueva) await supabase.from('pedidos').update({'estado': 'anulado'}).eq('id', id);
       } else if (mounted) {
-        await mostrarTicket(context, factura);
+        await ticketCobrado(context, factura);
       }
       _ronda.clear();
       _cuenta = null;
       await _cargarCuentas();
+      await _comprobarCaja(); // por si se abrió desde el cobro
     } catch (e) {
       _avisar('No se pudo cobrar: $e');
     }
@@ -285,12 +310,11 @@ class _BarraPageState extends State<BarraPage> {
             {'cantidad': l.cantidad.toStringAsFixed(0), 'descripcion': l.nombre, 'curso': 'ya'},
       ];
       if (cocina.isNotEmpty) Impresion.imprimirComanda('Cocina', _titulo, cocina).ignore();
-      if (pago.metodo == 'efectivo') Impresion.abrirCajon().catchError((_) {});
       _ronda.clear();
       _cuenta = null;
       await _cargarCuentas();
       EnviosPendientes.revisar(); // actualiza el aviso de ventas guardadas
-      if (mounted) await mostrarTicket(context, factura);
+      if (mounted) await ticketCobrado(context, factura);
       if (_modoMesa && mounted) {
         Navigator.pop(context, true); // mesa cobrada: vuelve al plano
         return;
@@ -515,6 +539,27 @@ class _BarraPageState extends State<BarraPage> {
               trailing: TextButton(onPressed: _ocupado ? null : _reintentarConexion, child: const Text('Reintentar')),
             ),
           ),
+        if (!_modoMesa && !_sinConexion && !_cajaAbierta)
+          Material(
+            color: const Color(0xFFFDF0DC),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+              child: Row(
+                children: [
+                  const Icon(Icons.lock_outline, color: Color(0xFFB45309)),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text('La caja está cerrada', style: TextStyle(fontWeight: FontWeight.w700)),
+                  ),
+                  FilledButton.icon(
+                    onPressed: _ocupado ? null : _abrirCaja,
+                    icon: const Icon(Icons.lock_open),
+                    label: const Text('Abrir caja'),
+                  ),
+                ],
+              ),
+            ),
+          ),
         // Cuentas abiertas (no en modo mesa)
         if (!_modoMesa) Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
@@ -522,6 +567,12 @@ class _BarraPageState extends State<BarraPage> {
             children: [
               Text('Cuentas', style: titulo(18)),
               const Spacer(),
+              TextButton.icon(
+                onPressed: () => mostrarVentasHoy(context),
+                style: TextButton.styleFrom(visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 8)),
+                icon: const Icon(Icons.receipt_long_outlined),
+                label: const Text('Ventas de hoy'),
+              ),
               if (_cuenta != null)
                 TextButton.icon(
                   onPressed: () => setState(() => _cuenta = null),
@@ -721,6 +772,7 @@ class _CobroSinConexionState extends State<_CobroSinConexion> {
         ]),
       ),
       actions: [
+        const InterruptorTicket(),
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
         FilledButton(
           onPressed: valido

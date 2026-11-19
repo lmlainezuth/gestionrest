@@ -1,8 +1,11 @@
+import 'package:flutter/foundation.dart' show debugPrint;
+import '../../core/software.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../main.dart';
 import '../barra/venta_offline.dart';
 import 'cadena_equipo.dart';
+import 'envios_pendientes.dart';
 import 'modelos.dart';
 import 'tbai_codigos.dart';
 import 'tbai_proveedor.dart';
@@ -36,12 +39,19 @@ class FacturacionService {
     Map<String, dynamic>? original, // factura que se rectifica o se sustituye
     bool rectificativa = false, // por diferencias (devolución): líneas en negativo
     bool sustituyeSimplificada = false, // factura con NIF que sustituye a un ticket
+    bool enviarEnSegundoPlano = false, // cobro: no esperar a Hacienda (se envía detrás)
   }) async {
-    final config = await _config();
+    // En paralelo: cada consulta es un viaje al servidor
+    final r0 = await Future.wait([
+      _config(),
+      cajaId == null
+          ? supabase.from('cajas').select('id, serie_factura').limit(1).single()
+          : supabase.from('cajas').select('id, serie_factura').eq('id', cajaId).single(),
+    ]);
+    debugPrint('[emitir] config y caja');
+    final config = r0[0];
     comprobarConfig(config);
-    final caja = cajaId == null
-        ? await supabase.from('cajas').select('id, serie_factura').limit(1).single()
-        : await supabase.from('cajas').select('id, serie_factura').eq('id', cajaId).single();
+    final caja = r0[1];
     // Cada punto de emisión tiene su cadena (serie base). Cada tipo en su serie:
     // tickets T1, con NIF T1F, rectificativas T1R; las tres en la MISMA cadena.
     // Un equipo con serie propia (el que cobra sin internet) usa siempre su cadena
@@ -54,6 +64,7 @@ class FacturacionService {
             '${VentaOffline.ultimoError == null ? '' : ': ${VentaOffline.ultimoError}'}');
       }
     }
+    debugPrint('[emitir] serie equipo: $equipo');
     final cadena = equipo ?? caja['serie_factura'] as String;
     final serie = '$cadena${rectificativa ? 'R' : cliente == null ? '' : 'F'}';
     final proveedor = proveedorPara(config['entorno'] as String);
@@ -64,17 +75,15 @@ class FacturacionService {
     // Varios intentos por si otro equipo de la misma cadena emite a la vez: la base de datos
     // rechaza (23505) que dos facturas cuelguen de la misma anterior o repitan número.
     for (var intento = 0; intento < 5; intento++) {
-      final ultimas = List<Map<String, dynamic>>.from(
-          await supabase.rpc('tbai_ultima_factura', params: {'p_cadena': cadena}) as List);
+      final r1 = await Future.wait<dynamic>([
+        supabase.rpc('tbai_ultima_factura', params: {'p_cadena': cadena}),
+        supabase.from('facturas').select('numero').eq('serie', serie).order('numero', ascending: false).limit(1).maybeSingle(),
+      ]);
+      final ultimas = List<Map<String, dynamic>>.from(r1[0] as List);
       final previa = ultimas.isEmpty ? null : ultimas.first;
-      final ultimaSerie = await supabase
-          .from('facturas')
-          .select('numero')
-          .eq('serie', serie)
-          .order('numero', ascending: false)
-          .limit(1)
-          .maybeSingle();
+      final ultimaSerie = r1[1] as Map<String, dynamic>?;
       final numero = ((ultimaSerie?['numero'] as int?) ?? 0) + 1;
+      debugPrint('[emitir] numerada');
       final fila = await prepararFactura(
         config: config,
         firmar: proveedor.firmar,
@@ -91,6 +100,7 @@ class FacturacionService {
         sustituyeSimplificada: sustituyeSimplificada,
       );
 
+      debugPrint('[emitir] firmada');
       try {
         final factura = await supabase
             .from('facturas')
@@ -99,6 +109,12 @@ class FacturacionService {
             .single();
         if (equipo != null) await CadenaEquipo.registrar(factura);
 
+        if (enviarEnSegundoPlano) {
+          // La factura ya está firmada y guardada (vale para imprimir); el envío va detrás.
+          // Si falla, queda pendiente y EnviosPendientes la reintenta sola.
+          _enviarDetras(proveedor, factura);
+          return factura;
+        }
         final envio = await proveedor.enviar(factura['xml'] as String);
         return await supabase
             .from('facturas')
@@ -112,6 +128,16 @@ class FacturacionService {
       }
     }
     throw StateError('No se pudo numerar la factura');
+  }
+
+  static void _enviarDetras(dynamic proveedor, Map<String, dynamic> factura) {
+    Future(() async {
+      final envio = await proveedor.enviar(factura['xml'] as String);
+      await supabase
+          .from('facturas')
+          .update({'estado_envio': envio.estado, 'respuesta_envio': envio.respuesta})
+          .eq('id', factura['id']);
+    }).catchError((_) {}).whenComplete(EnviosPendientes.revisar);
   }
 
   /// Construye, firma y deja lista para guardar la fila de una factura (con o sin internet).
@@ -160,9 +186,9 @@ class FacturacionService {
       desglose: desglose,
       anterior: anterior,
       licenciaTbai: (config['licencia_tbai'] as String?) ?? 'SIN-LICENCIA',
-      nifDesarrollador: (config['nif_desarrollador'] as String?) ?? config['nif'] as String,
-      nombreSoftware: config['nombre_software'] as String,
-      versionSoftware: config['version_software'] as String,
+      nifDesarrollador: (config['nif_desarrollador'] as String?) ?? Software.nifDesarrollador,
+      nombreSoftware: Software.nombre,
+      versionSoftware: Software.version,
       cliente: cliente,
       sustituyeSimplificada: sustituyeSimplificada,
       codigoRectificativa: codigoRect,
@@ -253,9 +279,9 @@ class FacturacionService {
       numero: factura['numero'] as int,
       fecha: DateTime.parse(factura['fecha'] as String).toLocal(),
       licenciaTbai: (config['licencia_tbai'] as String?) ?? 'SIN-LICENCIA',
-      nifDesarrollador: (config['nif_desarrollador'] as String?) ?? config['nif'] as String,
-      nombreSoftware: config['nombre_software'] as String,
-      versionSoftware: config['version_software'] as String,
+      nifDesarrollador: (config['nif_desarrollador'] as String?) ?? Software.nifDesarrollador,
+      nombreSoftware: Software.nombre,
+      versionSoftware: Software.version,
     );
     final firma = await proveedor.firmar(xml);
     final fila = await supabase.from('tbai_anulaciones').upsert({

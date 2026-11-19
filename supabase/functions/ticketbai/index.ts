@@ -1,8 +1,10 @@
 // Edge Function "ticketbai": firma XAdES-EPES y envía a la Hacienda Foral de Gipuzkoa.
 //
-// Secretos necesarios (Supabase → Edge Functions → Secrets):
-//   TBAI_P12        certificado .p12/.pfx en base64
-//   TBAI_P12_CLAVE  contraseña del certificado
+// Secretos necesarios (Supabase → Edge Functions → Secrets), UNO POR EMPRESA
+// (<ID> = id de la empresa sin guiones, en mayúsculas; "Comprobar certificado" lo muestra):
+//   TBAI_P12_<ID>        certificado .p12/.pfx en base64 del titular de esa empresa
+//   TBAI_P12_CLAVE_<ID>  contraseña del certificado
+// El certificado tiene que ser del NIF de la empresa: si no coincide, no se firma.
 //
 // Cuerpo: { accion: 'probar' }                       → datos del certificado
 //         { accion: 'firmar', xml: '<T:TicketBai…>' } → XML firmado y SignatureValue
@@ -121,17 +123,31 @@ Deno.serve(async (req) => {
     });
     const { data: usuario } = await supa.auth.getUser();
     if (!usuario.user) return json({ error: 'Sin sesión' }, 401);
-    const { data: config, error: errConfig } = await supa.from('tbai_config').select('entorno').limit(1).single();
+    // tbai_config solo devuelve la de la empresa actual del usuario (RLS por empresa)
+    const { data: config, error: errConfig } = await supa.from('tbai_config').select('empresa_id, entorno, nif').limit(1).single();
     if (errConfig || !config) return json({ error: 'No se pudo leer la configuración TicketBAI' }, 400);
 
-    const p12 = Deno.env.get('TBAI_P12');
-    const clave = Deno.env.get('TBAI_P12_CLAVE') ?? '';
-    if (!p12) return json({ error: 'Falta el secreto TBAI_P12 (certificado) en la Edge Function' }, 400);
+    // Certificado de ESTA empresa (cada bar puede tener un titular distinto)
+    const id = String(config.empresa_id).replaceAll('-', '').toUpperCase();
+    const nombreSecreto = `TBAI_P12_${id}`;
+    const p12 = Deno.env.get(nombreSecreto);
+    const clave = Deno.env.get(`TBAI_P12_CLAVE_${id}`) ?? '';
+    if (!p12) {
+      return json({ error: `Falta el certificado de esta empresa: crea los secretos ${nombreSecreto} y TBAI_P12_CLAVE_${id}` }, 400);
+    }
     const cert = await leerCertificado(p12, clave);
+    const nif = String(config.nif ?? '').trim().toUpperCase();
+    const coincide = nif.length > 0 && cert.titular.toUpperCase().includes(nif);
 
     const cuerpo = await req.json();
     if (cuerpo.accion === 'probar') {
-      return json({ ok: true, titular: cert.titular, caduca: cert.caduca, entorno: config.entorno });
+      if (!coincide) {
+        return json({ error: `El certificado (${cert.titular}) no es del NIF de la empresa (${nif || 'sin NIF'})` });
+      }
+      return json({ ok: true, titular: cert.titular, caduca: cert.caduca, entorno: config.entorno, secreto: nombreSecreto });
+    }
+    if (!coincide) {
+      return json({ error: `El certificado configurado no es del NIF de la empresa (${nif || 'sin NIF'}): no se firma` }, 400);
     }
     if (cuerpo.accion === 'certificado') {
       // Solo para el servicio puente de Netlify (conoce el secreto compartido)

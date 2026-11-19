@@ -7,6 +7,7 @@ import '../../core/tema.dart';
 import '../../main.dart';
 import '../ajustes/clientes_tab.dart' show editarCliente;
 import '../barra/venta_offline.dart';
+import '../auth/perfil.dart';
 import 'facturacion_service.dart';
 import 'modelos.dart';
 import 'ticket_view.dart';
@@ -22,22 +23,144 @@ class FacturasPage extends StatefulWidget {
 class _FacturasPageState extends State<FacturasPage> {
   late Future<List<Map<String, dynamic>>> _facturas = _cargar();
   bool _trabajando = false;
+  bool get _admin => Perfil.cache?.esAdmin ?? false;
+
+  // Por defecto solo hoy: con un año de facturas no se puede cargar todo
+  DateTimeRange _rango = _dia(DateTime.now());
+  String _filtro = 'hoy';
+  final _buscar = TextEditingController();
+  List<Map<String, dynamic>> _pendientes = [];
+  List<Map<String, dynamic>> _anulPendientes = [];
+  int _rechazadas = 0;
+
+  static DateTimeRange _dia(DateTime d) {
+    final ini = DateTime(d.year, d.month, d.day);
+    return DateTimeRange(start: ini, end: ini.add(const Duration(days: 1)));
+  }
 
   Future<List<Map<String, dynamic>>> _cargar() async {
-    final r = await Future.wait([
-      supabase.from('facturas').select().order('fecha', ascending: false).limit(200),
-      supabase.from('tbai_anulaciones').select(),
+    final texto = _buscar.text.trim().toUpperCase();
+    final m = RegExp(r'^([A-Z0-9]+)-(\d+)$').firstMatch(texto);
+    var q = supabase.from('facturas').select();
+    if (m != null) {
+      // Búsqueda por número (P2-10): en todas las fechas
+      q = q.eq('serie', m.group(1)!).eq('numero', int.parse(m.group(2)!));
+    } else {
+      q = q
+          .gte('fecha', _rango.start.toUtc().toIso8601String())
+          .lt('fecha', _rango.end.toUtc().toIso8601String());
+    }
+    final r = await Future.wait<dynamic>([
+      q.order('fecha', ascending: false).limit(1000),
+      // Pendientes y rechazadas: siempre a la vista, sean del día que sean
+      supabase.from('facturas').select().inFilter('estado_envio', ['pendiente', 'error']).order('fecha'),
+      supabase.from('tbai_anulaciones').select().inFilter('estado_envio', ['pendiente', 'error']),
     ]);
-    final anul = {for (final a in r[1]) a['factura_id'] as String: Map<String, dynamic>.from(a)};
-    final facturas = List<Map<String, dynamic>>.from(r[0]);
-    final sustituidas = {for (final f in facturas) if (f['sustituye_simplificada'] == true) f['rectifica_id']};
-    final rectificadas = {for (final f in facturas) if (f['tipo'] == 'rectificativa') f['rectifica_id']};
+    final facturas = List<Map<String, dynamic>>.from(r[0] as List);
+    // Rechazadas por Hacienda (factura o su anulación): siempre a la vista, arriba, sean del día que sean
+    final enLista = {for (final f in facturas) f['id']};
+    final rechazadas = [
+      for (final f in r[1] as List)
+        if (f['estado_envio'] == 'error' && f['legado'] != true) Map<String, dynamic>.from(f as Map)
+    ];
+    final idsAnulRech = [
+      for (final a in r[2] as List)
+        if (a['estado_envio'] == 'error' && !enLista.contains(a['factura_id'])) a['factura_id']
+    ];
+    if (idsAnulRech.isNotEmpty) {
+      rechazadas.addAll(List<Map<String, dynamic>>.from(
+          await supabase.from('facturas').select().inFilter('id', idsAnulRech).eq('legado', false)));
+    }
+    final extra = <Map<String, dynamic>>[];
+    for (final f in rechazadas) {
+      if (enLista.add(f['id'])) extra.add(f..['_fueraRango'] = true); // no suma en el total de las fechas elegidas
+    }
+    facturas.insertAll(0, extra);
+    _rechazadas = rechazadas.length;
+    _pendientes = List<Map<String, dynamic>>.from(r[1] as List).where((f) => f['estado_envio'] == 'pendiente').toList();
+    _anulPendientes = List<Map<String, dynamic>>.from(r[2] as List).where((a) => a['estado_envio'] == 'pendiente').toList();
+    final ids = facturas.map((f) => f['id']).toList();
+    final r2 = ids.isEmpty
+        ? [const [], const []]
+        : await Future.wait<dynamic>([
+            supabase.from('tbai_anulaciones').select().inFilter('factura_id', ids),
+            supabase.from('facturas').select('rectifica_id, tipo, sustituye_simplificada').inFilter('rectifica_id', ids),
+          ]);
+    final anul = {for (final a in r2[0] as List) a['factura_id'] as String: Map<String, dynamic>.from(a as Map)};
+    final hijas = List<Map<String, dynamic>>.from(r2[1] as List);
+    final sustituidas = {for (final f in hijas) if (f['sustituye_simplificada'] == true) f['rectifica_id']};
+    final rectificadas = {for (final f in hijas) if (f['tipo'] == 'rectificativa') f['rectifica_id']};
     for (final f in facturas) {
       f['_anulacion'] = anul[f['id']];
       f['_sustituida'] = sustituidas.contains(f['id']);
       f['_rectificada'] = rectificadas.contains(f['id']);
     }
     return facturas;
+  }
+
+  void _elegir(String filtro) async {
+    final hoy = DateTime.now();
+    DateTimeRange? r;
+    switch (filtro) {
+      case 'hoy':
+        r = _dia(hoy);
+      case 'ayer':
+        r = _dia(hoy.subtract(const Duration(days: 1)));
+      case 'semana':
+        final lunes = DateTime(hoy.year, hoy.month, hoy.day).subtract(Duration(days: hoy.weekday - 1));
+        r = DateTimeRange(start: lunes, end: _dia(hoy).end);
+      case 'mes':
+        r = DateTimeRange(start: DateTime(hoy.year, hoy.month), end: _dia(hoy).end);
+      case 'fechas':
+        final e = await showDateRangePicker(
+          context: context,
+          firstDate: DateTime(2024),
+          lastDate: hoy,
+          initialDateRange: DateTimeRange(start: _rango.start, end: _rango.end.subtract(const Duration(days: 1))),
+        );
+        if (e == null) return;
+        r = DateTimeRange(start: e.start, end: _dia(e.end).end);
+    }
+    _buscar.clear();
+    setState(() {
+      _filtro = filtro;
+      _rango = r!;
+      _facturas = _cargar();
+    });
+  }
+
+  String _f(DateTime d) => '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
+
+  Widget _barra(List<Map<String, dynamic>> facturas) {
+    final validas = facturas.where((f) => f['_anulacion'] == null && f['_sustituida'] != true && f['_fueraRango'] != true);
+    final total = validas.fold<double>(0, (s, f) => s + (f['importe_total'] as num).toDouble());
+    final fin = _rango.end.subtract(const Duration(days: 1));
+    final rotulo = _buscar.text.trim().isNotEmpty
+        ? 'Búsqueda'
+        : _rango.start == fin ? _f(fin) : '${_f(_rango.start)} – ${_f(fin)}';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          for (final e in const {'hoy': 'Hoy', 'ayer': 'Ayer', 'semana': 'Esta semana', 'mes': 'Este mes', 'fechas': 'Elegir fechas…'}.entries)
+            ChoiceChip(
+              label: Text(e.value),
+              selected: _filtro == e.key && _buscar.text.trim().isEmpty,
+              onSelected: (_) => _elegir(e.key),
+            ),
+          SizedBox(
+            width: 220,
+            child: TextField(
+              controller: _buscar,
+              decoration: const InputDecoration(isDense: true, hintText: 'Buscar nº (ej. P2-10)', prefixIcon: Icon(Icons.search)),
+              onSubmitted: (_) => _recargar(),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 8),
+        Text('$rotulo · ${facturas.length} documentos · ${euros(total)}', style: const TextStyle(color: C.gris)),
+      ]),
+    );
   }
 
   void _recargar() => setState(() => _facturas = _cargar());
@@ -252,7 +375,8 @@ class _FacturasPageState extends State<FacturasPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      floatingActionButton: FloatingActionButton.extended(
+      // Emitir, anular y devolver: solo el administrador (Gestión solo consulta)
+      floatingActionButton: !_admin ? null : FloatingActionButton.extended(
         onPressed: _trabajando ? null : _emitirPrueba,
         icon: const Icon(Icons.receipt_long),
         label: Text(_trabajando ? 'Trabajando…' : 'Emitir factura de prueba'),
@@ -307,17 +431,29 @@ class _FacturasPageState extends State<FacturasPage> {
             );
           }
           final facturas = snap.data!;
-          if (facturas.isEmpty) return const Center(child: Text('Todavía no hay facturas emitidas.'));
           // Las rechazadas no se reenvían tal cual: hay que corregirlas
-          final pendientes = facturas.where((f) => f['estado_envio'] == 'pendiente').toList();
-          final anulPendientes = [
-            for (final f in facturas)
-              if ((f['_anulacion'] as Map?)?['estado_envio'] == 'pendiente') Map<String, dynamic>.from(f['_anulacion'] as Map),
-          ];
+          final pendientes = _pendientes;
+          final anulPendientes = _anulPendientes;
           final nPend = pendientes.length + anulPendientes.length;
           return ListView(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
             children: [
+              _barra(facturas),
+              if (facturas.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.all(32),
+                  child: Center(child: Text('No hay facturas en estas fechas.', style: TextStyle(color: C.gris))),
+                ),
+              if (_rechazadas > 0)
+                Card(
+                  color: const Color(0xFFFBE4E2),
+                  elevation: 0,
+                  child: ListTile(
+                    leading: const Icon(Icons.error_outline, color: Color(0xFFB3261E)),
+                    title: Text('$_rechazadas ${_rechazadas == 1 ? 'rechazada' : 'rechazadas'} por Hacienda'),
+                    subtitle: const Text('Salen arriba aunque sean de otro día. Mira el motivo en cada una y corrígela.'),
+                  ),
+                ),
               if (nPend > 0)
                 Card(
                   color: const Color(0xFFFDF0DC),
@@ -375,7 +511,7 @@ class _FacturasPageState extends State<FacturasPage> {
               onPressed: () => _reenviarPendientes([f], const []),
               icon: const Icon(Icons.refresh, color: Color(0xFFB3261E)),
             )
-          : !valida || _trabajando
+          : !valida || _trabajando || !_admin
           ? null
           : PopupMenuButton<String>(
               tooltip: 'Acciones',

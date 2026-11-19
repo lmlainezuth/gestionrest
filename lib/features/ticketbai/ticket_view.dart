@@ -79,9 +79,74 @@ class TicketView extends StatelessWidget {
   }
 }
 
+/// Tras cobrar: sin pantalla que cerrar. Imprime (si toca) y deja un aviso breve con
+/// "Imprimir" por si el cliente lo pide. Las ventas del día se reimprimen en "Ventas de hoy".
+Future<void> ticketCobrado(BuildContext context, Map<String, dynamic> factura) async {
+  final imprimir = factura['tipo'] == 'completa' || await Impresion.imprimirVentas();
+  // Ticket y cajón en un solo envío a la impresora (dos conexiones seguidas la WINTEC no siempre las acepta)
+  if (imprimir) {
+    Impresion.imprimirTicket(factura, soloSiConfigurada: true, cajon: true).ignore();
+  } else {
+    Impresion.abrirCajon().catchError((_) {});
+  }
+  if (!context.mounted) return;
+  final m = ScaffoldMessenger.of(context);
+  m.hideCurrentSnackBar();
+  // Con botón de acción, Flutter deja el aviso fijo: se cierra a mano a los 5 s
+  final aviso = m.showSnackBar(SnackBar(
+    duration: const Duration(seconds: 5),
+    content: Text('Cobrado ${factura['serie']}-${factura['numero']} · ${euros(factura['importe_total'] as num)}'),
+    action: imprimir
+        ? null
+        : SnackBarAction(label: 'IMPRIMIR', onPressed: () => Impresion.imprimirTicket(factura).ignore()),
+  ));
+  var cerrado = false;
+  aviso.closed.then((_) => cerrado = true);
+  Future.delayed(const Duration(seconds: 5), () {
+    if (!cerrado) aviso.close();
+  });
+}
+
+/// Botón del cobro: imprimir o no el ticket (ahorro de papel). Se recuerda en el equipo.
+class InterruptorTicket extends StatefulWidget {
+  const InterruptorTicket({super.key});
+  @override
+  State<InterruptorTicket> createState() => _InterruptorTicketState();
+}
+
+class _InterruptorTicketState extends State<InterruptorTicket> {
+  bool? _imprimir;
+
+  @override
+  void initState() {
+    super.initState();
+    Impresion.imprimirVentas().then((v) => mounted ? setState(() => _imprimir = v) : null);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final on = _imprimir ?? true;
+    return TextButton.icon(
+      onPressed: _imprimir == null
+          ? null
+          : () {
+              setState(() => _imprimir = !on);
+              Impresion.guardarImprimirVentas(!on);
+            },
+      icon: Icon(on ? Icons.print_outlined : Icons.print_disabled_outlined),
+      label: Text(on ? 'Con ticket' : 'Sin ticket'),
+      style: TextButton.styleFrom(foregroundColor: on ? null : const Color(0xFFB45309)),
+    );
+  }
+}
+
 /// Muestra el ticket y, si hay impresora de tickets configurada, lo imprime.
 Future<void> mostrarTicket(BuildContext context, Map<String, dynamic> factura, {bool imprimirAuto = true}) async {
-  if (imprimirAuto) Impresion.imprimirTicket(factura, soloSiConfigurada: true).ignore();
+  // La factura con NIF se imprime siempre; el ticket, solo si este equipo lo tiene activado
+  if (imprimirAuto && (factura['tipo'] == 'completa' || await Impresion.imprimirVentas())) {
+    Impresion.imprimirTicket(factura, soloSiConfigurada: true).ignore();
+  }
+  if (!context.mounted) return;
   await showDialog<void>(
     context: context,
     builder: (ctx) => Dialog(

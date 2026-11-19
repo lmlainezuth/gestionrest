@@ -13,6 +13,8 @@ import '../ticketbai/cadena_equipo.dart';
 import '../../main.dart';
 import '../ticketbai/tbai_proveedor.dart' show probarCertificado;
 import '../ticketbai/facturacion_service.dart' show FacturacionService;
+import '../ticketbai/verificacion_presencial.dart';
+import '../../core/software.dart';
 
 /// Datos fiscales y comerciales del negocio (empresa + TicketBAI + serie de caja).
 class EmpresaTab extends StatefulWidget {
@@ -206,7 +208,7 @@ class _EmpresaTabState extends State<EmpresaTab> {
                     setState(() {
                       _entorno = v;
                       // Licencia de pruebas que publica Gipuzkoa para su entorno de pruebas
-                      if (v == 'pruebas' && _licencia.text.trim().isEmpty) _licencia.text = 'TBAIGIPRE00000000001';
+                      if (v == 'pruebas' && _licencia.text.trim().isEmpty) _licencia.text = 'TBAIGIPRE00000001337';
                     });
                   },
                 ),
@@ -220,8 +222,12 @@ class _EmpresaTabState extends State<EmpresaTab> {
                   style: const TextStyle(color: C.gris, fontSize: 13),
                 ),
                 const SizedBox(height: 14),
-                campo(_licencia, 'Licencia TicketBAI', ayuda: 'En pruebas: TBAIGIPRE00000000001. En producción, la que da Hacienda al registrar el software'),
+                campo(_licencia, 'Licencia TicketBAI', ayuda: 'En pruebas: TBAIGIPRE00000001337 (la nuestra). En producción, la que da Hacienda al registrar el software'),
                 campo(_nifDesarrollador, 'NIF del desarrollador del software', ayuda: 'El NIF de quien hace la app (va en cada factura)'),
+                Text('Software: ${Software.nombre} ${Software.version} · desarrollador ${Software.nifDesarrollador}',
+                    style: const TextStyle(color: C.gris, fontSize: 13)),
+                const Align(alignment: Alignment.centerLeft, child: BotonVerificacionTbai()),
+                const SizedBox(height: 8),
                 Row(children: [
                   OutlinedButton.icon(
                     onPressed: _probando

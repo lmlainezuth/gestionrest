@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 
-import '../../core/impresion.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
 import '../ajustes/clientes_tab.dart' show editarCliente;
 import '../carta/colores.dart' show leerImporte;
 import '../ticketbai/facturacion_service.dart';
 import '../ticketbai/modelos.dart';
+import '../ticketbai/tbai_proveedor.dart' show precalentarFirma;
+import '../ticketbai/ticket_view.dart' show InterruptorTicket;
+import 'abrir_caja.dart';
 import 'caja_service.dart';
 
 typedef _Pago = ({String metodo, double importe, double? entregado});
@@ -50,6 +52,7 @@ class _CobroDialogState extends State<CobroDialog> {
   @override
   void initState() {
     super.initState();
+    precalentarFirma(); // por si se cobra desde mesas sin haber pasado por Barra
     _ponerImporte(_restante);
   }
 
@@ -156,11 +159,20 @@ class _CobroDialogState extends State<CobroDialog> {
       _cobrando = true;
       _error = null;
     });
+    final sw = Stopwatch()..start();
+    void t(String paso) => debugPrint('[cobro] $paso ${sw.elapsedMilliseconds} ms');
     try {
       final caja = await CajaService.caja();
-      final turno = await CajaService.turnoAbierto(caja['id'] as String);
-      if (turno == null) throw 'La caja está cerrada: ábrela en la sección Caja';
+      t('caja');
+      var turno = await CajaService.turnoAbierto(caja['id'] as String);
+      if (turno == null) {
+        // Caja cerrada: se abre aquí mismo y se sigue cobrando
+        if (!mounted || !await abrirCajaRapida(context)) throw 'Para cobrar hay que abrir la caja';
+        turno = await CajaService.turnoAbierto(caja['id'] as String);
+        if (turno == null) throw 'No se pudo abrir la caja';
+      }
 
+      t('turno');
       // Si un intento anterior ya emitió la factura, se reutiliza
       final factura = await supabase.from('facturas').select().eq('pedido_id', widget.pedido['id']).maybeSingle() ??
           await FacturacionService().emitir(
@@ -168,8 +180,11 @@ class _CobroDialogState extends State<CobroDialog> {
             pedidoId: widget.pedido['id'] as String,
             cajaId: caja['id'] as String,
             cliente: _conNif ? _cliente : null,
+            enviarEnSegundoPlano: true,
           );
-      await supabase.from('pagos').insert([
+      t('factura emitida');
+      await Future.wait([
+        supabase.from('pagos').insert([
         for (final p in _pagos)
           {
             'pedido_id': widget.pedido['id'],
@@ -179,19 +194,20 @@ class _CobroDialogState extends State<CobroDialog> {
             if (p.entregado != null) 'pago_con': p.entregado,
             if (p.entregado != null) 'vuelto': p.entregado! - p.importe,
           },
+        ]),
+        supabase.from('pedidos').update({
+          'estado': 'pagado',
+          'pagado_en': DateTime.now().toUtc().toIso8601String(),
+          'turno_id': turno['id'],
+          if (_conNif) 'cliente_id': _cliente!['id'],
+        }).eq('id', widget.pedido['id']),
+        if (widget.mesaId != null)
+          supabase.from('mesas').update({'disponibilidad': 'libre'}).eq('id', widget.mesaId!),
       ]);
-      await supabase.from('pedidos').update({
-        'estado': 'pagado',
-        'pagado_en': DateTime.now().toUtc().toIso8601String(),
-        'turno_id': turno['id'],
-        if (_conNif) 'cliente_id': _cliente!['id'],
-      }).eq('id', widget.pedido['id']);
-      if (widget.mesaId != null) {
-        await supabase.from('mesas').update({'disponibilidad': 'libre'}).eq('id', widget.mesaId!);
-      }
-      if (_pagos.any((p) => p.metodo == 'efectivo')) Impresion.abrirCajon().catchError((_) {});
+      t('pagos guardados');
       if (mounted) Navigator.pop(context, factura);
     } catch (e) {
+      t('ERROR $e');
       setState(() {
         _cobrando = false;
         _error = '$e';
@@ -350,6 +366,7 @@ class _CobroDialogState extends State<CobroDialog> {
         ),
       ),
       actions: [
+        const InterruptorTicket(),
         TextButton(onPressed: _cobrando ? null : () => Navigator.pop(context), child: const Text('Cancelar')),
         FilledButton(
           onPressed: _cobrando || _lineas.isEmpty ? null : _boton,

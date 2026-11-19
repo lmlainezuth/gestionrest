@@ -65,7 +65,13 @@ Deno.serve(async (req) => {
   });
   if (error) return json({ error: error.message }, 400);
 
-  await admin.from("perfiles").update({ nombre, empresa_actual: empresa }).eq("id", data.user.id);
-  await admin.from("empresa_usuarios").insert({ empresa_id: empresa, usuario_id: data.user.id, rol, activo: true });
+  // Si falla cualquier paso se borra el usuario: nunca queda uno a medias (sin empresa)
+  const { error: e1 } = await admin.from("perfiles").update({ nombre, empresa_actual: empresa }).eq("id", data.user.id);
+  const { error: e2 } = e1 ? { error: null } :
+    await admin.from("empresa_usuarios").insert({ empresa_id: empresa, usuario_id: data.user.id, rol, activo: true });
+  if (e1 || e2) {
+    await admin.auth.admin.deleteUser(data.user.id);
+    return json({ error: `No se pudo crear el usuario: ${(e1 ?? e2)!.message}` }, 400);
+  }
   return json({ id: data.user.id });
 });

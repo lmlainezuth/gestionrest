@@ -17,10 +17,12 @@ const CORS = {
 const json = (cuerpo, status = 200) =>
   new Response(JSON.stringify(cuerpo), { status, headers: { ...CORS, 'Content-Type': 'application/json' } });
 
-let certificado = null; // se guarda en memoria mientras la función siga caliente
+// En memoria mientras la función siga caliente, POR SESIÓN: cada usuario trabaja en una
+// empresa y cada empresa tiene su certificado (nunca se mezcla el de otra)
+const certificados = new Map();
 
 async function leerCertificado(auth) {
-  if (certificado) return certificado;
+  if (certificados.has(auth)) return certificados.get(auth);
   const r = await fetch(`${process.env.SUPABASE_URL}/functions/v1/ticketbai`, {
     method: 'POST',
     headers: {
@@ -33,7 +35,9 @@ async function leerCertificado(auth) {
   });
   const d = await r.json();
   if (!d.p12) throw new Error(d.error ?? 'No se pudo obtener el certificado');
-  certificado = { pfx: Buffer.from(d.p12, 'base64'), passphrase: d.clave ?? '' };
+  const certificado = { pfx: Buffer.from(d.p12, 'base64'), passphrase: d.clave ?? '' };
+  if (certificados.size > 100) certificados.clear();
+  certificados.set(auth, certificado);
   return certificado;
 }
 
@@ -81,7 +85,7 @@ export default async (req) => {
     const r = await enviar(host, baja ? '/sarrerak/baja' : '/sarrerak/alta', xmlFirmado, cert);
     return json(r);
   } catch (e) {
-    certificado = null;
+    certificados.clear();
     return json({ error: String(e?.message ?? e) }, 500);
   }
 };

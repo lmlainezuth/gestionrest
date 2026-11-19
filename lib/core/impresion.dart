@@ -6,8 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../features/ticketbai/modelos.dart' show Desglose, LineaFactura, euros;
 import 'escpos.dart';
 
-/// Impresión de tickets: directa por red (ESC/POS) o en PDF por la impresora del sistema.
-/// Cada equipo guarda qué impresora usa para: ticket, Cocina y Barra.
+/// Impresión de tickets: directa (ESC/POS por red, USB, serie o Windows) o en PDF por la impresora del sistema.
+/// Cada equipo guarda qué impresora usa para: ticket, Cocina y Barra, y dónde está el cajón.
 class Impresion {
   static const ticket = 'ticket';
 
@@ -19,13 +19,31 @@ class Impresion {
     url == null ? await p.remove('impresora_$uso') : await p.setString('impresora_$uso', url);
   }
 
-  static Future<ImpresoraRed?> red(String uso) async => ImpresoraRed.desde(await impresora(uso));
+  /// ¿Imprimir el ticket de venta al cobrar? (cada equipo lo recuerda; por defecto sí)
+  static Future<bool> imprimirVentas() async =>
+      (await SharedPreferences.getInstance()).getBool('imprimir_ventas') ?? true;
+  static Future<void> guardarImprimirVentas(bool v) async =>
+      (await SharedPreferences.getInstance()).setBool('imprimir_ventas', v);
 
-  /// Abre el cajón conectado a la impresora de tickets (si es de red).
+  static Future<ImpresoraDirecta?> red(String uso) async => ImpresoraDirecta.desde(await impresora(uso));
+
+  /// Dónde está el cajón: null = en la impresora de tickets, 'ninguno', o una conexión propia (JSON).
+  static Future<String?> cajon() async => (await SharedPreferences.getInstance()).getString('cajon');
+  static Future<void> guardarCajon(String? v) async {
+    final p = await SharedPreferences.getInstance();
+    v == null ? await p.remove('cajon') : await p.setString('cajon', v);
+  }
+
+  /// ¿El cajón va enchufado a la impresora de tickets? (entonces se abre en el mismo envío que el ticket)
+  static Future<bool> _cajonEnTicket() async => await cajon() == null;
+
+  /// Abre el cajón: por su conexión propia o por la impresora de tickets.
   static Future<void> abrirCajon() async {
-    final r = await red(ticket);
+    final c = await cajon();
+    if (c == 'ninguno') return;
+    final r = c == null ? await red(ticket) : ImpresoraDirecta.desde(c);
     if (r == null) return;
-    await r.enviar(EscPos(r.columnas)..abrirCajon());
+    await r.abrirCajon();
   }
 
   static Future<(pw.Font, pw.Font)> _fuentes() async {
@@ -70,7 +88,7 @@ class Impresion {
     final lineasF = (f['lineas'] as List).map((m) => LineaFactura.fromMap(Map<String, dynamic>.from(m as Map))).toList();
     final r = await red(ticket);
     if (r != null) {
-      final t = EscPos(r.columnas)
+      final t = r.ticket()
         ..linea('${f['razon_social_emisor']}', centro: true, grande: true)
         ..linea('NIF ${f['nif_emisor']}', centro: true)
         ..raya()
@@ -105,10 +123,14 @@ class Impresion {
       t
         ..raya()
         ..linea('Gracias por su visita · Eskerrik asko', centro: true);
-      if (cajon) t.abrirCajon();
+      final juntos = cajon && await _cajonEnTicket();
+      if (juntos) t.abrirCajon();
       t.cortar();
-      return r.enviar(t);
+      await r.enviar(t);
+      if (cajon && !juntos) await abrirCajon();
+      return;
     }
+    if (cajon) abrirCajon().catchError((_) {});
     final (fuente, negrita) = await _fuentes();
     final s = pw.TextStyle(font: fuente, fontSize: 8);
     final b = pw.TextStyle(font: negrita, fontSize: 8);
@@ -162,7 +184,7 @@ class Impresion {
   static Future<void> imprimirPrecuenta(String titulo, List<Map<String, dynamic>> detalle, num total) async {
     final r = await red(ticket);
     if (r != null) {
-      final t = EscPos(r.columnas)
+      final t = r.ticket()
         ..linea('PRECUENTA', centro: true, grande: true)
         ..linea(titulo, centro: true)
         ..linea(_fecha(DateTime.now()), centro: true)
@@ -208,7 +230,7 @@ class Impresion {
     if (lineas.isEmpty || await impresora(area) == null) return;
     final r = await red(area);
     if (r != null) {
-      final t = EscPos(r.columnas)
+      final t = r.ticket()
         ..linea(area.toUpperCase(), centro: true, grande: true)
         ..linea(titulo, centro: true, fuerte: true)
         ..linea(_fecha(DateTime.now()), centro: true)
@@ -241,5 +263,54 @@ class Impresion {
         ]),
       ));
     await _imprimir(area, 'Comanda $area $titulo', doc, soloSiConfigurada: true);
+  }
+
+  /// Informe simple (cierre de caja...). Cada línea: (texto, importe). Importe null = título de
+  /// sección en negrita; texto '-' = raya; texto que empieza por '!' = fila en negrita.
+  static Future<void> imprimirInforme(String titulo, List<String> cabecera, List<(String, String?)> lineas) async {
+    final r = await red(ticket);
+    if (r != null) {
+      final t = r.ticket()..linea(titulo, centro: true, grande: true);
+      for (final c in cabecera) {
+        t.linea(c, centro: true);
+      }
+      t.raya();
+      for (final (a, b) in lineas) {
+        if (a == '-') {
+          t.raya();
+        } else if (b == null) {
+          t.linea(a, fuerte: true);
+        } else if (a.startsWith('!')) {
+          t.fila(a.substring(1), b, fuerte: true, alto: true);
+        } else {
+          t.fila(a, b);
+        }
+      }
+      t.cortar();
+      return r.enviar(t);
+    }
+    final (fuente, negrita) = await _fuentes();
+    final s = pw.TextStyle(font: fuente, fontSize: 8);
+    final n = pw.TextStyle(font: negrita, fontSize: 8);
+    final doc = pw.Document()
+      ..addPage(pw.Page(
+        pageFormat: PdfPageFormat.roll80,
+        margin: const pw.EdgeInsets.all(4 * PdfPageFormat.mm),
+        build: (_) => pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.stretch, children: [
+          pw.Text(titulo, textAlign: pw.TextAlign.center, style: n.copyWith(fontSize: 11)),
+          for (final c in cabecera) pw.Text(c, textAlign: pw.TextAlign.center, style: s),
+          _raya(),
+          for (final (a, b) in lineas)
+            if (a == '-')
+              _raya()
+            else if (b == null)
+              pw.Padding(padding: const pw.EdgeInsets.only(top: 2), child: pw.Text(a, style: n))
+            else if (a.startsWith('!'))
+              _fila(a.substring(1), b, n.copyWith(fontSize: 10))
+            else
+              _fila(a, b, s),
+        ]),
+      ));
+    await _imprimir(ticket, titulo, doc);
   }
 }

@@ -263,7 +263,7 @@ Future<bool> dividirCuenta(BuildContext context, Map<String, dynamic> pedido) as
     return false;
   }
   if (context.mounted) {
-    await mostrarTicket(context, factura);
+    await ticketCobrado(context, factura);
   }
   // Si ya no queda nada por cobrar, la cuenta original se cierra
   final quedan = await supabase

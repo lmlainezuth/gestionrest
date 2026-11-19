@@ -1,0 +1,2 @@
+// Copiar como software_privado.dart y poner el NIF real de la persona desarrolladora.
+const nifDesarrolladorPrivado = '00000000T';

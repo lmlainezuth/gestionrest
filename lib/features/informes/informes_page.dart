@@ -72,7 +72,7 @@ class _InformesPageState extends State<InformesPage> {
           .lt('pagado_en', hasta.toUtc().toIso8601String())
           .order('pagado_en')
           .range(a, b));
-      final perfiles = await supabase.from('perfiles').select('id, nombre');
+      final perfiles = await supabase.rpc('equipo_empresa') as List; // también para Gestión (perfiles solo lo lee el admin)
       _pedidos = List<Map<String, dynamic>>.from(pedidos);
       _nombres = {for (final p in perfiles) p['id'] as String: p['nombre'] as String};
       _error = null;

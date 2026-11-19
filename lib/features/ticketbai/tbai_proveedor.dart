@@ -105,6 +105,11 @@ class ProveedorGipuzkoa implements TicketBaiProveedor {
     return FirmaResultado(r['xmlFirmado'] as String, r['signatureValue'] as String);
   }
 
+  static bool _yaRecibido(Map<String, dynamic> r) {
+    final textos = [r['descripcion'], for (final e in (r['errores'] as List? ?? [])) (e as Map)['descripcion']];
+    return textos.any((t) => t != null && RegExp(r'ya (ha sido |fue )?recibid|duplicad', caseSensitive: false).hasMatch('$t'));
+  }
+
   /// Lee la respuesta XML de Hacienda (Salida/Estado, CSV, ResultadosValidacion).
   static Map<String, dynamic> leerRespuesta(String xml) {
     String? tag(String n) =>
@@ -148,6 +153,8 @@ class ProveedorGipuzkoa implements TicketBaiProveedor {
         'fecha': r['fechaRecepcion'],
         'avisos': r['errores'],
       });
+      // Reenvío de algo que Hacienda ya tenía (se perdió la respuesta la primera vez): ya está recibido
+      if (r['estado'] == '01' && _yaRecibido(r)) return EnvioResultado('enviada', respuesta);
       return switch (r['estado']) {
         '00' => EnvioResultado('enviada', respuesta),
         '01' => EnvioResultado('error', respuesta),
@@ -173,6 +180,15 @@ Future<FirmaResultado?> firmarEnEquipo(String xml) async {
   final r = await FirmaXades.firmar(xml,
       certificadoBase64: c.der, firmarRsa: (datos) => FirmaEquipo.firmar(cert.bytes, cert.clave, datos));
   return FirmaResultado(r.xml, r.signatureValue);
+}
+
+/// Deja el firmador del equipo arrancado (Windows: PowerShell tarda en abrir).
+Future<void> precalentarFirma() async {
+  try {
+    if (kIsWeb || !FirmaEquipo.soportada) return;
+    final cert = await CertificadoEquipo.leer();
+    if (cert != null) FirmaEquipo.precalentar(cert.bytes, cert.clave);
+  } catch (_) {}
 }
 
 /// Comprueba el certificado configurado en el servidor.

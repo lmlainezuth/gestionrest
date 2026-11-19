@@ -38,6 +38,33 @@ class MainActivity : FlutterActivity() {
     // Firma TicketBAI en el propio TPV (sin internet): RSA-SHA256 con el certificado del negocio
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        // Impresora interna del TPV (USB o puerto serie). En segundo plano: el permiso USB espera al usuario
+        val impresora = ImpresoraTpv(applicationContext)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "gestionrest/impresora").setMethodCallHandler { call, result ->
+            Thread {
+                try {
+                    val r: Any? = when (call.method) {
+                        "listarUsb" -> impresora.listarUsb()
+                        "listarSerie" -> impresora.listarSerie()
+                        "usb" -> {
+                            impresora.enviarUsb(call.argument<Int>("vid") ?: 0, call.argument<Int>("pid") ?: 0, call.argument<ByteArray>("datos")!!)
+                            null
+                        }
+                        "serie" -> {
+                            impresora.enviarSerie(call.argument<String>("puerto")!!, call.argument<Int>("baudios") ?: 0, call.argument<ByteArray>("datos")!!)
+                            null
+                        }
+                        else -> {
+                            runOnUiThread { result.notImplemented() }
+                            return@Thread
+                        }
+                    }
+                    runOnUiThread { result.success(r) }
+                } catch (e: Exception) {
+                    runOnUiThread { result.error("IMPRESORA", e.message ?: e.toString(), null) }
+                }
+            }.start()
+        }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "gestionrest/firma").setMethodCallHandler { call, result ->
             try {
                 val p12 = call.argument<ByteArray>("p12")!!

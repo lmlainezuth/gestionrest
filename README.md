@@ -1,17 +1,46 @@
-# gestionrest
+# GestiónRest
 
-A new Flutter project.
+Programa de gestión para bares y restaurantes, con TicketBAI para Gipuzkoa.
 
-## Getting Started
+Autor: **Levin Mauricio Lainez Aguirre** ([lmlainezuth](https://github.com/lmlainezuth))
 
-This project is a starting point for a Flutter application.
+## Qué hace
 
-A few resources to get you started if this is your first Flutter project:
+- Mesas y comandas, barra (venta rápida) y pantalla de cocina
+- Carta, precios y carta pública con QR
+- Caja: apertura, cobro (efectivo, tarjeta, Bizum), cierre y ticket de cierre
+- Informes, márgenes e IVA
+- Stock, pedidos a proveedores, reservas, fichajes y cuadrante
+- Varias empresas (varios bares) en la misma app
+- Funciona sin internet y sincroniza al volver la conexión
+- Impresoras de tickets y cocina (red, USB y puerto serie) y cajón portamonedas
+- Copia de seguridad mensual en Google Drive
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+## TicketBAI
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+- Generación del fichero de alta y de anulación, firma XAdES y encadenamiento
+- Envío a la Hacienda Foral de Gipuzkoa (entorno de pruebas y de producción)
+- Factura simplificada, factura completa con NIF y facturas rectificativas
+- Código TicketBAI y QR impresos en el ticket
+- Pantalla de verificación presencial (art. 8 de la OF 521/2020)
+- Firma en el propio equipo (cobra sin internet) o en el servidor
+
+## Tecnología
+
+- [Flutter](https://flutter.dev) (Android y web)
+- [Supabase](https://supabase.com): PostgreSQL con RLS por empresa y Edge Functions (`supabase/functions`)
+- Netlify Functions (`netlify/functions/tbai.mjs`): puente TLS con Hacienda
+
+## Compilar
+
+1. Copia `lib/core/software_privado.dart.ejemplo` como `lib/core/software_privado.dart` y pon el NIF de la persona desarrolladora (ese archivo no se sube a git).
+2. En `lib/core/config.dart`, pon la URL y la clave publicable de tu proyecto de Supabase.
+3. Ejecuta las migraciones de `supabase/migrations` y despliega las funciones de `supabase/functions`.
+4. Los certificados y las claves van como secretos de Supabase y variables de Netlify, nunca en el repositorio.
+5. `flutter pub get` y `flutter build apk --release`.
+
+## Licencia
+
+Copyright (C) 2026 Levin Mauricio Lainez Aguirre
+
+Este programa es software libre: puedes redistribuirlo y modificarlo según los términos de la Licencia Pública General de GNU, versión 3 ([GPL-3.0](LICENSE)).

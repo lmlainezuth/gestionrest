@@ -235,7 +235,7 @@ class _ComandaPageState extends State<ComandaPage> {
       builder: (_) => CobroDialog(pedido: _pedido!, mesaId: widget.mesa?['id'] as String?),
     );
     if (factura == null || !mounted) return;
-    await mostrarTicket(context, factura);
+    await ticketCobrado(context, factura);
     if (mounted) Navigator.pop(context, true);
   }
 

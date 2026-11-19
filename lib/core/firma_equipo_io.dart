@@ -1,7 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/services.dart';
+import 'package:pointycastle/export.dart';
 
 /// Firma RSA-SHA256 con el certificado (.pfx) instalado en este equipo, sin internet.
 /// Android: KeyStore PKCS12 de Java (MainActivity.kt). Windows: .NET desde PowerShell.
@@ -30,7 +33,9 @@ class FirmaEquipo {
         caduca: DateTime.fromMillisecondsSinceEpoch(r['caduca'] as int),
       );
     } else {
+      debugPrint('[firma] leyendo certificado…');
       final out = await _powershell('cert', p12, clave, const []);
+      debugPrint('[firma] certificado leído');
       final partes = out.split('|');
       c = (der: partes[0], titular: partes[1], caduca: DateTime.parse(partes[2]));
     }
@@ -45,7 +50,85 @@ class FirmaEquipo {
           {'p12': Uint8List.fromList(p12), 'clave': clave, 'datos': Uint8List.fromList(datos)});
       return r as Uint8List;
     }
-    return base64.decode(await _powershell('firmar', p12, clave, datos));
+    final sw = Stopwatch()..start();
+    // Rápido: clave en memoria y firma en Dart (sin abrir PowerShell en cada ticket)
+    if (_rsaFallo != _huella(p12, clave)) try {
+      final k = await _clave(p12, clave);
+      final f = _firmarDart(k, datos);
+      debugPrint('[firma] en memoria ${sw.elapsedMilliseconds} ms');
+      return f;
+    } catch (e) {
+      _rsaFallo = _huella(p12, clave); // no se reintenta en cada ticket
+      debugPrint('[firma] en memoria no disponible: $e');
+    }
+    if (!_usarServidor) {
+      final f = await _powershell('firmar', p12, clave, datos);
+      debugPrint('[firma] powershell ${sw.elapsedMilliseconds} ms');
+      return base64.decode(f);
+    }
+    try {
+      final f = await _Servidor.firmar(_huella(p12, clave), p12, clave, datos);
+      debugPrint('[firma] servidor ${sw.elapsedMilliseconds} ms');
+      return base64.decode(f);
+    } catch (e) {
+      // Si el firmador rápido falla, el método de siempre (lento pero seguro)
+      debugPrint('[firma] servidor falló en ${sw.elapsedMilliseconds} ms: $e');
+      final f = await _powershell('firmar', p12, clave, datos);
+      debugPrint('[firma] método lento ${sw.elapsedMilliseconds} ms');
+      return base64.decode(f);
+    }
+  }
+
+  /// Arranca ya el firmador de Windows para que el primer cobro no espere.
+  // Clave privada RSA solo en memoria (nunca en disco); se lee una vez por sesión
+  static RSAPrivateKey? _rsa;
+  static String? _rsaHuella;
+  static Future<RSAPrivateKey>? _cargandoRsa;
+  static String? _rsaFallo;
+
+  static BigInt _big(String b64) =>
+      base64.decode(b64).fold<BigInt>(BigInt.zero, (a, b) => (a << 8) | BigInt.from(b));
+
+  static Future<RSAPrivateKey> _clave(List<int> p12, String clave) async {
+    final h = _huella(p12, clave);
+    if (_rsa != null && _rsaHuella == h) return _rsa!;
+    if (_cargandoRsa != null) return _cargandoRsa!;
+    _cargandoRsa = () async {
+      final sw = Stopwatch()..start();
+      final partes = (await _powershell('clave', p12, clave, const [])).split('|');
+      final k = RSAPrivateKey(_big(partes[0]), _big(partes[2]), _big(partes[3]), _big(partes[4]));
+      // Comprobación: lo firmado tiene que verificarse con la clave pública
+      final prueba = [1, 2, 3, 4];
+      final firma = _firmarDart(k, prueba);
+      final v = RSASigner(SHA256Digest(), '0609608648016503040201')
+        ..init(false, PublicKeyParameter<RSAPublicKey>(RSAPublicKey(k.modulus!, _big(partes[1]))));
+      if (!v.verifySignature(Uint8List.fromList(prueba), RSASignature(Uint8List.fromList(firma)))) {
+        throw StateError('la clave leída no verifica');
+      }
+      _rsa = k;
+      _rsaHuella = h;
+      debugPrint('[firma] clave cargada en ${sw.elapsedMilliseconds} ms');
+      return k;
+    }();
+    try {
+      return await _cargandoRsa!;
+    } finally {
+      _cargandoRsa = null;
+    }
+  }
+
+  static List<int> _firmarDart(RSAPrivateKey k, List<int> datos) {
+    final s = RSASigner(SHA256Digest(), '0609608648016503040201')
+      ..init(true, PrivateKeyParameter<RSAPrivateKey>(k));
+    return s.generateSignature(Uint8List.fromList(datos)).bytes;
+  }
+
+  /// Firmador en segundo plano: desactivado (en Windows se quedaba sin responder).
+  static const _usarServidor = false;
+
+  static void precalentar(List<int> p12, String clave) {
+    if (Platform.isWindows) _clave(p12, clave).ignore();
+    if (_usarServidor && Platform.isWindows) _Servidor.asegurar(_huella(p12, clave), p12, clave).ignore();
   }
 
   static const _script = r'''
@@ -60,6 +143,17 @@ function Abrir($flags) {
 try { $col = Abrir $F::EphemeralKeySet } catch { $col = Abrir ($F::UserKeySet -bor $F::Exportable) }
 $c = $col | Where-Object { $_.HasPrivateKey } | Select-Object -First 1
 if ($null -eq $c) { throw 'El certificado no contiene la clave privada' }
+if ($env:TBAI_ACCION -eq 'clave') {
+  $X = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]
+  try { $pp = $X::GetRSAPrivateKey($c).ExportParameters($true) } catch {
+    $col = Abrir ($F::UserKeySet -bor $F::Exportable)
+    $c = $col | Where-Object { $_.HasPrivateKey } | Select-Object -First 1
+    $pp = $X::GetRSAPrivateKey($c).ExportParameters($true)
+  }
+  $partes = @($pp.Modulus, $pp.Exponent, $pp.D, $pp.P, $pp.Q) | ForEach-Object { [Convert]::ToBase64String($_) }
+  [Console]::Out.Write($partes -join '|')
+  exit 0
+}
 if ($env:TBAI_ACCION -eq 'cert') {
   [Console]::Out.Write([Convert]::ToBase64String($c.RawData) + '|' + $c.Subject + '|' + $c.NotAfter.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))
   exit 0
@@ -103,5 +197,124 @@ try {
     } finally {
       await dir.delete(recursive: true);
     }
+  }
+}
+
+/// PowerShell abierto en segundo plano con el certificado ya cargado: arrancar PowerShell
+/// tarda 1–3 s, así que se arranca una vez y cada firma es una línea (Base64) por stdin.
+class _Servidor {
+  static Process? _p;
+  static String? _huella;
+  static StreamIterator<String>? _lineas;
+  static Future<void>? _arrancando;
+  static Future<void> _cola = Future.value();
+
+  static const _script = r'''
+$ErrorActionPreference = 'Stop'
+$F = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]
+function Abrir($flags) {
+  $col = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2Collection
+  $col.Import($env:TBAI_PFX, $env:TBAI_CLAVE, $flags)
+  return $col
+}
+try { $col = Abrir $F::EphemeralKeySet } catch { $col = Abrir ($F::UserKeySet -bor $F::Exportable) }
+$c = $col | Where-Object { $_.HasPrivateKey } | Select-Object -First 1
+if ($null -eq $c) { throw 'El certificado no contiene la clave privada' }
+$H = [System.Security.Cryptography.HashAlgorithmName]::SHA256
+$P = [System.Security.Cryptography.RSASignaturePadding]::Pkcs1
+$rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($c)
+try { [void]$rsa.SignData([byte[]](1,2,3), $H, $P) } catch {
+  $cng = New-Object System.Security.Cryptography.RSACng
+  $cng.ImportParameters($rsa.ExportParameters($true))
+  $rsa = $cng
+}
+[Console]::Out.WriteLine('LISTO'); [Console]::Out.Flush()
+while ($true) {
+  $l = [Console]::In.ReadLine()
+  if ($null -eq $l -or $l -eq 'FIN') { break }
+  try {
+    $f = $rsa.SignData([Convert]::FromBase64String($l), $H, $P)
+    [Console]::Out.WriteLine('OK ' + [Convert]::ToBase64String($f))
+  } catch { [Console]::Out.WriteLine('ERR ' + $_.Exception.Message) }
+  [Console]::Out.Flush()
+}
+''';
+
+  static Future<void> asegurar(String huella, List<int> p12, String clave) async {
+    if (_p != null && _huella == huella) return;
+    if (_arrancando != null) return _arrancando;
+    _arrancando = _arrancar(huella, p12, clave);
+    try {
+      await _arrancando;
+    } finally {
+      _arrancando = null;
+    }
+  }
+
+  static Future<void> _arrancar(String huella, List<int> p12, String clave) async {
+    _p?.kill();
+    _p = null;
+    final dir = await Directory.systemTemp.createTemp('tbais');
+    try {
+      final pfx = File('${dir.path}\\c.pfx');
+      final ps1 = File('${dir.path}\\s.ps1');
+      await pfx.writeAsBytes(p12, flush: true);
+      await ps1.writeAsString(_script, flush: true);
+      final p = await Process.start(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ps1.path],
+        environment: {'TBAI_PFX': pfx.path, 'TBAI_CLAVE': clave},
+      );
+      final err = StringBuffer();
+      p.stderr.transform(utf8.decoder).listen(err.write);
+      final lineas = StreamIterator(p.stdout.transform(utf8.decoder).transform(const LineSplitter()));
+      final listo = await lineas.moveNext().timeout(const Duration(seconds: 15), onTimeout: () => false);
+      if (!listo || lineas.current.trim() != 'LISTO') {
+        p.kill();
+        throw StateError('Firma en el equipo: ${err.toString().trim().split('\n').first}');
+      }
+      _p = p;
+      _huella = huella;
+      _lineas = lineas;
+      p.exitCode.then((_) {
+        if (identical(_p, p)) _p = null;
+      });
+    } finally {
+      // El certificado ya está cargado en memoria: el fichero temporal sobra
+      dir.delete(recursive: true).ignore();
+    }
+  }
+
+  /// Una firma cada vez (en cola), por la misma tubería.
+  static Future<String> firmar(String huella, List<int> p12, String clave, List<int> datos) {
+    final c = Completer<String>();
+    _cola = _cola.then((_) async {
+      try {
+        c.complete(await _firmarUna(huella, p12, clave, datos));
+      } catch (e) {
+        c.completeError(e);
+      }
+    });
+    return c.future;
+  }
+
+  static Future<String> _firmarUna(String huella, List<int> p12, String clave, List<int> datos) async {
+    for (var intento = 0; intento < 2; intento++) {
+      try {
+        await asegurar(huella, p12, clave);
+        _p!.stdin.writeln(base64.encode(datos));
+        await _p!.stdin.flush();
+        final ok = await _lineas!.moveNext().timeout(const Duration(seconds: 5), onTimeout: () => false);
+        if (!ok) throw StateError('El firmador no respondió');
+        final l = _lineas!.current.trim();
+        if (l.startsWith('OK ')) return l.substring(3);
+        throw StateError('Firma en el equipo: ${l.startsWith('ERR ') ? l.substring(4) : l}');
+      } catch (e) {
+        _p?.kill();
+        _p = null;
+        if (intento == 1) rethrow;
+      }
+    }
+    throw StateError('Firma en el equipo: no disponible');
   }
 }

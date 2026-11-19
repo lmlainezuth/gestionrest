@@ -5,4 +5,5 @@ class FirmaEquipo {
       throw UnsupportedError('La versión web no firma en el equipo');
   static Future<List<int>> firmar(List<int> p12, String clave, List<int> datos) =>
       throw UnsupportedError('La versión web no firma en el equipo');
+  static void precalentar(List<int> p12, String clave) {}
 }

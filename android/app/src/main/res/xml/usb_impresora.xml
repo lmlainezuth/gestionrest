@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- PT80KM3 del TPV del Pasaka (vid 1155 = 0x0483) y cualquier impresora USB estándar -->
+    <usb-device vendor-id="1155" />
+    <usb-device class="7" />
+</resources>
