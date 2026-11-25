@@ -1,6 +1,8 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/red.dart';
 import '../../core/tema.dart';
@@ -156,6 +158,13 @@ class _FacturasPageState extends State<FacturasPage> {
               onSubmitted: (_) => _recargar(),
             ),
           ),
+          // Los zips de Drive con los ficheros firmados (lo que se entrega si Hacienda los pide)
+          if (_admin)
+            OutlinedButton.icon(
+              onPressed: _copiasDrive,
+              icon: const Icon(Icons.cloud_download_outlined),
+              label: const Text('Copias en Drive'),
+            ),
         ]),
         const SizedBox(height: 8),
         Text('$rotulo · ${facturas.length} documentos · ${euros(total)}', style: const TextStyle(color: C.gris)),
@@ -164,6 +173,84 @@ class _FacturasPageState extends State<FacturasPage> {
   }
 
   void _recargar() => setState(() => _facturas = _cargar());
+
+  static String _nombreMes(String mes) {
+    const nombres = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre',
+      'Octubre', 'Noviembre', 'Diciembre'];
+    final p = mes.split('-');
+    final m = int.tryParse(p.length == 2 ? p[1] : '') ?? 0;
+    return m >= 1 && m <= 12 ? '${nombres[m - 1]} ${p[0]}' : mes;
+  }
+
+  /// La copia más reciente de cada mes en Google Drive, con su enlace.
+  Future<void> _copiasDrive() async {
+    List<Map<String, dynamic>> copias;
+    try {
+      copias = List<Map<String, dynamic>>.from(await supabase
+          .from('copias_seguridad')
+          .select('mes, enlace, detalle, creado_en')
+          .eq('estado', 'ok')
+          .order('creado_en', ascending: false)
+          .limit(300));
+    } catch (e) {
+      _avisar(textoError(e));
+      return;
+    }
+    final porMes = <String, Map<String, dynamic>>{};
+    for (final c in copias) {
+      porMes.putIfAbsent(c['mes'] as String, () => c);
+    }
+    final meses = porMes.values.toList()..sort((a, b) => (b['mes'] as String).compareTo(a['mes'] as String));
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Copias en Google Drive'),
+        content: SizedBox(
+          width: 480,
+          child: meses.isEmpty
+              ? const Text('Todavía no hay ninguna copia. Se hace sola cada noche.')
+              : ListView(shrinkWrap: true, children: [
+                  const Text(
+                    'Un zip por mes con todos los ficheros TicketBAI firmados y la respuesta de Hacienda. '
+                    'Es lo que se entrega si Hacienda pide los ficheros.',
+                    style: TextStyle(color: C.gris, fontSize: 13),
+                  ),
+                  const SizedBox(height: 8),
+                  for (final c in meses)
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.folder_zip_outlined),
+                      title: Text(_nombreMes(c['mes'] as String)),
+                      subtitle: Text('${c['detalle'] ?? ''} · copia del ${_f(DateTime.parse(c['creado_en'] as String).toLocal())}'),
+                      trailing: c['enlace'] == null
+                          ? null
+                          : Wrap(spacing: 4, children: [
+                              IconButton(
+                                tooltip: 'Copiar enlace',
+                                icon: const Icon(Icons.copy),
+                                onPressed: () async {
+                                  await Clipboard.setData(ClipboardData(text: c['enlace'] as String));
+                                  _avisar('Enlace copiado');
+                                },
+                              ),
+                              IconButton(
+                                tooltip: 'Abrir en Drive',
+                                icon: const Icon(Icons.open_in_new),
+                                onPressed: () async {
+                                  final ok = await launchUrl(Uri.parse(c['enlace'] as String),
+                                      mode: LaunchMode.externalApplication);
+                                  if (!ok) _avisar('No se pudo abrir: copia el enlace');
+                                },
+                              ),
+                            ]),
+                    ),
+                ]),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cerrar'))],
+      ),
+    );
+  }
 
   void _avisar(String t) {
     if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t)));

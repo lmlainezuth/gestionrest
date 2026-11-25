@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/hora_equipo.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
 import '../barra/venta_offline.dart';
@@ -23,6 +24,28 @@ Future<bool> abrirCajaRapida(BuildContext context) async {
   final dejado = (ultimo?['fondo_siguiente'] as num?)?.toDouble();
   final propuesto = dejado ?? ((ultimo?['efectivo_inicial'] as num?) ?? 0).toDouble();
   if (!context.mounted) return false;
+
+  // Los tickets llevan la hora del equipo: si el reloj va mal, se avisa antes de empezar a cobrar
+  final desfase = await HoraEquipo.desfase(forzar: true);
+  if (HoraEquipo.mal(desfase)) {
+    if (!context.mounted) return false;
+    final seguir = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.schedule, color: Color(0xFFB3261E)),
+        title: const Text('La hora de este equipo no es correcta'),
+        content: Text(
+          'Va ${HoraEquipo.texto(desfase!)} respecto a la hora real, y los tickets salen con la hora del equipo.\n\n'
+          'Corrígela antes de cobrar: Ajustes del equipo › Fecha y hora › activa "Fecha y hora automáticas".',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Abrir igualmente')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Voy a corregirla')),
+        ],
+      ),
+    );
+    if (seguir != true || !context.mounted) return false;
+  }
 
   final ctrl = TextEditingController(text: propuesto.toStringAsFixed(2).replaceAll('.', ','));
   ctrl.selection = TextSelection(baseOffset: 0, extentOffset: ctrl.text.length);

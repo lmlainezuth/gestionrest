@@ -35,6 +35,8 @@ class _PanelHoyPageState extends State<PanelHoyPage> {
   List<Map<String, dynamic>> _hoy = [], _semana = [], _pagos = [];
   final _avisos = <_Aviso>[];
   Map<String, dynamic>? _copia;
+  int? _tamano; // bytes que ocupa la base (plan gratuito: 500 MB)
+  static const _limiteBase = 500 * 1024 * 1024;
   bool _copiando = false;
   bool _conDatos = false; // si una recarga falla, se sigue viendo lo último
 
@@ -54,6 +56,7 @@ class _PanelHoyPageState extends State<PanelHoyPage> {
   static String _iso(DateTime d) => d.toUtc().toIso8601String();
   static String _dia(DateTime d) => '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
+  static String _mb(int bytes) => '${(bytes / (1024 * 1024)).toStringAsFixed(0)} MB';
   static String _fecha(DateTime d) => '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
 
   Future<void> _cargar() async {
@@ -104,6 +107,9 @@ class _PanelHoyPageState extends State<PanelHoyPage> {
       certificados = await CaducidadCertificados.porCaducar();
     } catch (_) {}
     final cola = await VentaOffline.resumenCola();
+    try {
+      _tamano = (await supabase.rpc('tamano_base') as num?)?.toInt();
+    } catch (_) {} // sin la migración 0028
     _hoy = List<Map<String, dynamic>>.from(r[0] as List);
     _semana = List<Map<String, dynamic>>.from(r[1] as List);
     _pagos = List<Map<String, dynamic>>.from(r[2] as List);
@@ -191,6 +197,17 @@ class _PanelHoyPageState extends State<PanelHoyPage> {
         titulo: '${cola.n} venta${cola.n == 1 ? '' : 's'} sin subir en este equipo'
             '${desde == null ? '' : ' desde ${desde.day == ahora.day && ahora.difference(desde).inHours < 24 ? hhmm(desde) : '${_fecha(desde)} ${hhmm(desde)}'}'}',
         detalle: 'Se suben solas al volver internet. No desinstales la app ni borres sus datos hasta entonces',
+      ));
+    }
+    // Espacio de la base de datos: si se llena, deja de guardar ventas
+    if (_tamano != null && _tamano! >= _limiteBase * 0.75) {
+      final pct = (_tamano! * 100 / _limiteBase).round();
+      _avisos.add((
+        icono: Icons.storage_outlined,
+        color: pct >= 90 ? rojo : C.naranja,
+        titulo: 'Base de datos al $pct % (${_mb(_tamano!)} de 500 MB)',
+        detalle: 'Plan gratuito de Supabase: si se llena, no se pueden guardar ventas. '
+            'Hay que limpiar lo que ya está archivado en Drive',
       ));
     }
     // Empleados con turno que no han fichado
@@ -367,6 +384,14 @@ class _PanelHoyPageState extends State<PanelHoyPage> {
               ),
             ]),
           ),
+          if (_tamano != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6, left: 4),
+              child: Text(
+                'Base de datos: ${_mb(_tamano!)} de 500 MB (${(_tamano! * 100 / _limiteBase).toStringAsFixed(0)} %)',
+                style: const TextStyle(fontSize: 12, color: C.gris),
+              ),
+            ),
           const SizedBox(height: 10),
           const _ResumenCorreo(),
         ],

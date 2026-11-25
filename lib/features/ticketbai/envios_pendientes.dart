@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../core/conexion.dart';
+import '../../core/hora_equipo.dart';
 import '../../main.dart';
 import '../barra/venta_offline.dart';
 import 'caducidad_certificados.dart';
@@ -17,8 +18,9 @@ class EstadoTbai {
   final String? errorLocal; // por qué no se pudieron subir (si no es la falta de conexión)
   final DateTime? localesDesde; // la más antigua de esas ventas
   final int? certDias; // días que le quedan al certificado de este equipo (null: no tiene)
+  final Duration? horaDesfase; // hora del equipo − hora del servidor (null: no se sabe)
   const EstadoTbai(this.pendientes, this.rechazadas, this.entorno,
-      [this.locales = 0, this.errorLocal, this.localesDesde, this.certDias]);
+      [this.locales = 0, this.errorLocal, this.localesDesde, this.certDias, this.horaDesfase]);
   static const vacio = EstadoTbai(0, 0, 'produccion');
 }
 
@@ -114,7 +116,7 @@ class EnviosPendientes {
   static Future<EstadoTbai> estadoLocal(int pendientes, int rechazadas, String entorno) async {
     final c = await VentaOffline.resumenCola();
     return EstadoTbai(pendientes, rechazadas, entorno, c.n, VentaOffline.ultimoError, c.desde,
-        await CaducidadCertificados.diasEquipo());
+        await CaducidadCertificados.diasEquipo(), await HoraEquipo.desfase());
   }
 }
 
@@ -174,6 +176,8 @@ class _AvisoTbaiState extends State<AvisoTbai> {
           if (e.locales > 0)
             '${e.locales} venta${e.locales == 1 ? '' : 's'} sin subir en este equipo${_desde(e.localesDesde)} '
                 '(se suben solas al volver internet): no desinstales la app ni borres sus datos',
+          if (HoraEquipo.mal(e.horaDesfase))
+            'La hora de este equipo va ${HoraEquipo.texto(e.horaDesfase!)}: corrígela (fecha y hora automáticas)',
           if (e.certDias != null && e.certDias! < 0) 'CERTIFICADO DE ESTE EQUIPO CADUCADO: no puede firmar',
           if (e.certDias != null && e.certDias! >= 0 && e.certDias! <= CaducidadCertificados.diasAviso)
             'El certificado de este equipo caduca en ${e.certDias} día${e.certDias == 1 ? '' : 's'}: avisa al encargado',
@@ -181,7 +185,7 @@ class _AvisoTbaiState extends State<AvisoTbai> {
           if (e.pendientes > 0) '${e.pendientes} sin enviar a Hacienda (se reintenta solo)',
         ];
         if (textos.isEmpty) return widget.child;
-        final grave = e.entorno != 'produccion' || e.rechazadas > 0 || e.errorLocal != null ||
+        final grave = e.entorno != 'produccion' || e.rechazadas > 0 || e.errorLocal != null || HoraEquipo.mal(e.horaDesfase) ||
             (e.certDias != null && e.certDias! <= 7) ||
             (e.localesDesde != null && DateTime.now().difference(e.localesDesde!) > const Duration(hours: 12));
         return Column(children: [
