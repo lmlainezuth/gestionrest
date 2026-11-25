@@ -8,6 +8,7 @@ import '../../core/certificado_equipo.dart';
 import '../../core/red.dart';
 import '../../main.dart';
 import '../ticketbai/cadena_equipo.dart';
+import '../ticketbai/caducidad_certificados.dart';
 import '../ticketbai/facturacion_service.dart';
 import '../ticketbai/modelos.dart';
 import '../ticketbai/tbai_proveedor.dart';
@@ -68,7 +69,16 @@ class VentaOffline {
           'usuario': supabase.auth.currentUser?.id,
           'guardado': DateTime.now().toIso8601String(),
         }));
-    final serie = await CadenaEquipo.serie();
+    // Apunta cuándo caduca el certificado de este equipo (el panel avisa 30 días antes)
+    await CaducidadCertificados.registrarEquipo();
+    var serie = await CadenaEquipo.serie();
+    // En producción solo vale una serie asignada a este bar y titular (p. ej. tras pasar a producción
+    // o cambiar el NIF, las anteriores dejan de valer): sin ella, este equipo no cobra sin internet
+    if (serie != null && (await cola()).isEmpty &&
+        await supabase.rpc('tbai_serie_valida', params: {'p_serie': serie}) == false) {
+      await CadenaEquipo.guardarSerie(null);
+      serie = null;
+    }
     if (serie != null && (await cola()).isEmpty) {
       final ultimas = List<Map<String, dynamic>>.from(
           await supabase.rpc('tbai_ultima_factura', params: {'p_cadena': serie}) as List);
@@ -323,6 +333,17 @@ class VentaOffline {
     final s = (await SharedPreferences.getInstance()).getString(_kCola);
     if (s == null) return [];
     return List<Map<String, dynamic>>.from((jsonDecode(s) as List).map((e) => Map<String, dynamic>.from(e as Map)));
+  }
+
+  /// Cuántas ventas sin internet hay en este equipo sin subir y la fecha de la más antigua.
+  static Future<({int n, DateTime? desde})> resumenCola() async {
+    final lista = await cola();
+    DateTime? desde;
+    for (final v in lista) {
+      final f = DateTime.tryParse('${(v['factura'] as Map?)?['fecha']}')?.toLocal();
+      if (f != null && (desde == null || f.isBefore(desde))) desde = f;
+    }
+    return (n: lista.length, desde: desde);
   }
 
   static bool _sincronizando = false;

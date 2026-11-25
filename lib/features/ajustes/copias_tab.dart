@@ -24,6 +24,7 @@ class _CopiasTabState extends State<CopiasTab> {
     'articulos_stock', 'escandallos', 'movimientos_stock', 'pedidos_proveedor', 'pedido_proveedor_lineas',
     'cuadrante', 'reservas', 'fichajes', 'registro_anulaciones',
     'tbai_subsanaciones', // 0025
+    'tbai_series', // 0026 (va en la copia; no se restaura: solo la escribe la base de datos)
   ];
   bool _trabajando = false;
   String _estado = '';

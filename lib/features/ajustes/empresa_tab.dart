@@ -10,6 +10,7 @@ import '../../core/firma_equipo.dart' if (dart.library.io) '../../core/firma_equ
 import '../../core/tema.dart';
 import '../barra/venta_offline.dart' show VentaOffline;
 import '../ticketbai/cadena_equipo.dart';
+import '../ticketbai/caducidad_certificados.dart';
 import '../../main.dart';
 import '../ticketbai/tbai_proveedor.dart' show probarCertificado;
 import '../ticketbai/facturacion_service.dart' show FacturacionService;
@@ -31,8 +32,8 @@ class _EmpresaTabState extends State<EmpresaTab> {
   final _nif = TextEditingController();
   final _direccion = TextEditingController();
   final _telefono = TextEditingController();
-  final _serie = TextEditingController();
-  final _serieEquipo = TextEditingController(); // serie propia de este equipo (cobro sin internet)
+  String? _serieEquipo; // serie propia de este equipo (cobro sin internet); la asigna la base de datos
+  bool _asignando = false;
   final _licencia = TextEditingController();
   final _nifDesarrollador = TextEditingController();
   String _entorno = 'simulado';
@@ -59,12 +60,11 @@ class _EmpresaTabState extends State<EmpresaTab> {
       _nif.text = _tbai!['nif'] as String? ?? '';
       _direccion.text = _empresa!['direccion'] as String? ?? '';
       _telefono.text = _empresa!['telefono'] as String? ?? '';
-      _serie.text = _caja!['serie_factura'] as String? ?? '';
       _licencia.text = _tbai!['licencia_tbai'] as String? ?? '';
       _nifDesarrollador.text = _tbai!['nif_desarrollador'] as String? ?? '';
       _entorno = _tbai!['entorno'] as String? ?? 'simulado';
       _certEquipo = (await CertificadoEquipo.leer())?.nombre;
-      _serieEquipo.text = await CadenaEquipo.serie() ?? '';
+      _serieEquipo = await CadenaEquipo.serie();
     } catch (e) {
       _error = '$e';
     }
@@ -75,14 +75,11 @@ class _EmpresaTabState extends State<EmpresaTab> {
     if (!_form.currentState!.validate()) return;
     setState(() => _guardando = true);
     final nif = _nif.text.trim().toUpperCase();
-    final serie = _serie.text.trim().toUpperCase();
+    // Titular nuevo o paso a producción: la caja recibe serie nueva (no se encadena con lo anterior)
+    // y la de este equipo hay que volver a asignarla
+    final serieNueva = nif != _tbai!['nif'] || (_entorno == 'produccion' && _tbai!['entorno'] != 'produccion');
     try {
-      // Paso a producción: serie nueva y limpia (no se encadena con facturas de pruebas)
       if (_entorno == 'produccion' && _tbai!['entorno'] != 'produccion') {
-        final usadas = await supabase.from('facturas').select('id').eq('cadena', serie).limit(1);
-        if ((usadas as List).isNotEmpty) {
-          throw 'Para producción usa una serie nueva sin facturas (por ejemplo A1); "$serie" ya tiene facturas de pruebas';
-        }
         FacturacionService.comprobarConfig({
           'entorno': 'produccion',
           'licencia_tbai': _licencia.text.trim(),
@@ -94,9 +91,8 @@ class _EmpresaTabState extends State<EmpresaTab> {
       if (_tbai!['entorno'] == 'produccion' && _entorno != 'produccion') {
         throw 'El bar ya factura en producción: no se puede volver a pruebas ni a simulado';
       }
-      // En producción la serie no se cambia: rompería la cadena de facturas
-      if (_tbai!['entorno'] == 'produccion' && serie != _caja!['serie_factura']) {
-        throw 'En producción no se puede cambiar la serie';
+      if (serieNueva && (await VentaOffline.cola()).isNotEmpty) {
+        throw 'Hay ventas sin internet pendientes de subir: espera a que se suban antes de cambiar el titular o pasar a producción';
       }
       await supabase.from('empresa').update({
         'nombre': _nombre.text.trim(),
@@ -111,26 +107,54 @@ class _EmpresaTabState extends State<EmpresaTab> {
         'nif_desarrollador': _nifDesarrollador.text.trim().isEmpty ? null : _nifDesarrollador.text.trim().toUpperCase(),
         'entorno': _entorno,
       }).eq('id', _tbai!['id']);
-      final serieEquipo = _serieEquipo.text.trim().toUpperCase();
-      if (serieEquipo.isNotEmpty && (serieEquipo == serie || !RegExp(r'^[A-Z0-9]{1,10}$').hasMatch(serieEquipo))) {
-        throw 'La serie de este equipo debe ser distinta de la de la caja y solo letras y números (ej. B1)';
-      }
-      final serieEquipoAntes = await CadenaEquipo.serie() ?? '';
-      if (serieEquipo != serieEquipoAntes) {
-        if (_tbai!['entorno'] == 'produccion' && serieEquipoAntes.isNotEmpty) {
-          throw 'En producción no se cambia la serie de un equipo que ya factura';
+      var aviso = 'Datos guardados';
+      if (serieNueva) {
+        final s = await supabase.rpc('tbai_asignar_serie', params: {'p_tipo': 'caja', 'p_descripcion': _caja!['nombre']}) as String;
+        _caja!['serie_factura'] = s;
+        aviso = 'Datos guardados. Serie nueva de la caja: $s';
+        if (_serieEquipo != null) {
+          await CadenaEquipo.guardarSerie(null);
+          _serieEquipo = null;
+          aviso += '. Vuelve a asignar la serie de este equipo';
         }
-        await CadenaEquipo.guardarSerie(serieEquipo);
-        await VentaOffline.guardarContexto();
       }
-      await supabase.from('cajas').update({'serie_factura': serie}).eq('id', _caja!['id']);
       _tbai!['entorno'] = _entorno;
-      _caja!['serie_factura'] = serie;
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Datos guardados')));
+      _tbai!['nif'] = nif;
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(aviso)));
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(textoError(e))));
     }
     if (mounted) setState(() => _guardando = false);
+  }
+
+  /// Pide a la base de datos una serie libre para este equipo (no se repite nunca para el titular).
+  Future<void> _asignarSerieEquipo() async {
+    final ctrl = TextEditingController(text: 'TPV barra');
+    final nombre = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Asignar serie a este equipo'),
+        content: TextField(controller: ctrl, autofocus: true,
+            decoration: const InputDecoration(labelText: 'Nombre del equipo', helperText: 'Para saber de quién es cada serie')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('Asignar')),
+        ],
+      ),
+    );
+    if (nombre == null) return;
+    setState(() => _asignando = true);
+    try {
+      final s = await supabase.rpc('tbai_asignar_serie',
+          params: {'p_tipo': 'equipo', 'p_descripcion': nombre.isEmpty ? null : nombre}) as String;
+      await CadenaEquipo.guardarSerie(s);
+      await VentaOffline.guardarContexto();
+      _serieEquipo = s;
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Serie de este equipo: $s')));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(textoError(e))));
+    }
+    if (mounted) setState(() => _asignando = false);
   }
 
   @override
@@ -179,7 +203,18 @@ class _EmpresaTabState extends State<EmpresaTab> {
                 const SizedBox(height: 12),
                 campo(_razon, 'Razón social', validar: obligatorio, ayuda: 'Sale en los tickets y facturas'),
                 campo(_nif, 'NIF', validar: (v) => (v ?? '').trim().length == 9 ? null : 'El NIF tiene 9 caracteres'),
-                campo(_serie, 'Serie de facturas de esta caja', validar: obligatorio, ayuda: 'Ejemplo: T1. Con NIF: serie + "F"; rectificativas: serie + "R". El IVA se elige en cada producto de la carta'),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 14),
+                  child: InputDecorator(
+                    decoration: const InputDecoration(
+                      labelText: 'Serie de facturas de esta caja',
+                      helperText: 'La asigna el programa y no se repite nunca para este titular. Con NIF: serie + "F"; '
+                          'rectificativas: serie + "R". Cambia sola si cambias el NIF o pasas a producción',
+                      helperMaxLines: 3,
+                    ),
+                    child: Text('${_caja!['serie_factura'] ?? '—'}', style: const TextStyle(fontWeight: FontWeight.w600)),
+                  ),
+                ),
                 const SizedBox(height: 8),
                 Text('TicketBAI', style: titulo(20)),
                 const SizedBox(height: 12),
@@ -291,6 +326,8 @@ class _EmpresaTabState extends State<EmpresaTab> {
                             // Comprueba contraseña y clave privada antes de guardarlo
                             final c = await FirmaEquipo.certificado(bytes, clave);
                             await CertificadoEquipo.guardar(bytes, clave, f.name);
+                            CaducidadCertificados.olvidar();
+                            await CaducidadCertificados.registrarEquipo();
                             if (!context.mounted) return;
                             setState(() => _certEquipo = f.name);
                             ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -309,21 +346,45 @@ class _EmpresaTabState extends State<EmpresaTab> {
                         TextButton(
                           onPressed: () async {
                             await CertificadoEquipo.quitar();
+                            CaducidadCertificados.olvidar();
                             if (mounted) setState(() => _certEquipo = null);
                           },
                           child: const Text('Quitar'),
                         ),
                     ]),
                   const SizedBox(height: 12),
-                  TextFormField(
-                    controller: _serieEquipo,
-                    decoration: const InputDecoration(
-                      labelText: 'Serie propia de este equipo (para cobrar sin internet)',
-                      helperText: 'Ej. B1 en el TPV de barra. Cada equipo la suya, distinta de la de la caja; '
-                          'déjalo vacío en los equipos que no cobran sin internet. Necesita el certificado.',
-                      helperMaxLines: 3,
-                    ),
-                  ),
+                  Text('Serie propia de este equipo (para cobrar sin internet)', style: titulo(14)),
+                  const SizedBox(height: 4),
+                  const Text(
+                      'Solo en los equipos que cobran sin internet (y con certificado). El programa le da una serie '
+                      'que no usa nadie más. Si el equipo se estropea, el de repuesto recibe una nueva.',
+                      style: TextStyle(color: C.gris, fontSize: 13)),
+                  const SizedBox(height: 8),
+                  Wrap(spacing: 10, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                    Text(_serieEquipo == null ? 'Sin serie propia' : 'Serie: $_serieEquipo',
+                        style: TextStyle(fontWeight: FontWeight.w600, color: _serieEquipo == null ? C.gris : C.verde)),
+                    if (_serieEquipo == null)
+                      OutlinedButton.icon(
+                        onPressed: _asignando ? null : _asignarSerieEquipo,
+                        icon: const Icon(Icons.confirmation_number_outlined),
+                        label: Text(_asignando ? 'Asignando…' : 'Asignar serie'),
+                      ),
+                    if (_serieEquipo != null && _tbai!['entorno'] != 'produccion')
+                      TextButton(
+                        onPressed: () async {
+                          if ((await VentaOffline.cola()).isNotEmpty) {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Hay ventas sin internet pendientes de subir')));
+                            }
+                            return;
+                          }
+                          await CadenaEquipo.guardarSerie(null);
+                          if (mounted) setState(() => _serieEquipo = null);
+                        },
+                        child: const Text('Quitar'),
+                      ),
+                  ]),
                   ]),
                 ),
                 const SizedBox(height: 14),

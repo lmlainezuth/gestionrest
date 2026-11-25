@@ -10,6 +10,8 @@ import '../../core/tema.dart';
 import '../../main.dart';
 import '../auth/perfil.dart';
 import '../gestion/comun.dart' show Cifra;
+import '../barra/venta_offline.dart' show VentaOffline;
+import '../ticketbai/caducidad_certificados.dart';
 import '../ticketbai/modelos.dart' show euros;
 import 'control_comun.dart';
 
@@ -52,11 +54,7 @@ class _PanelHoyPageState extends State<PanelHoyPage> {
   static String _iso(DateTime d) => d.toUtc().toIso8601String();
   static String _dia(DateTime d) => '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
-  static String _mesAnterior() {
-    final h = DateTime.now();
-    final d = DateTime(h.year, h.month - 1);
-    return '${d.year}-${d.month.toString().padLeft(2, '0')}';
-  }
+  static String _fecha(DateTime d) => '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
 
   Future<void> _cargar() async {
     try {
@@ -97,8 +95,15 @@ class _PanelHoyPageState extends State<PanelHoyPage> {
       seguro(supabase.from('fichajes').select('usuario_id').gte('momento', _iso(hoy0))),
       seguro(supabase.rpc('equipo_empresa')),
       seguro(supabase.from('pedidos').select('total').inFilter('estado', ['abierto', 'precuenta'])),
-      seguro(supabase.from('copias_seguridad').select().order('creado_en', ascending: false).limit(1)),
+      seguro(supabase.from('copias_seguridad').select().order('creado_en', ascending: false).limit(20)),
     ]);
+    // El certificado del servidor se mira como mucho cada 12 h (lo apunta para todos los equipos)
+    unawaited(CaducidadCertificados.registrarServidor());
+    var certificados = <({String origen, String? titular, DateTime caduca, int dias})>[];
+    try {
+      certificados = await CaducidadCertificados.porCaducar();
+    } catch (_) {}
+    final cola = await VentaOffline.resumenCola();
     _hoy = List<Map<String, dynamic>>.from(r[0] as List);
     _semana = List<Map<String, dynamic>>.from(r[1] as List);
     _pagos = List<Map<String, dynamic>>.from(r[2] as List);
@@ -112,6 +117,7 @@ class _PanelHoyPageState extends State<PanelHoyPage> {
     final abiertas = r[10] as List<Map<String, dynamic>>;
     final copias = r[11] as List<Map<String, dynamic>>;
     _copia = copias.isEmpty ? null : copias.first;
+    final copiaOk = copias.where((c) => c['estado'] == 'ok').firstOrNull;
 
     double n(Object? v) => (v as num?)?.toDouble() ?? 0;
     _avisos.clear();
@@ -160,6 +166,33 @@ class _PanelHoyPageState extends State<PanelHoyPage> {
         detalle: 'Míralo en Números › Facturas emitidas',
       ));
     }
+    // Certificados que caducan (el día que caducan no se puede firmar)
+    for (final c in certificados) {
+      final caducado = c.caduca.isBefore(ahora);
+      final equipo = c.origen.replaceFirst('equipo', '').trim();
+      final donde = c.origen == 'servidor'
+          ? 'el del servidor (tablets): súbelo de nuevo a Supabase (TBAI_P12_…)'
+          : 'el del ${equipo.isEmpty ? 'TPV' : 'equipo $equipo'}: instálalo en Ajustes › Empresa';
+      _avisos.add((
+        icono: Icons.key_off_outlined,
+        color: caducado || c.dias <= 7 ? rojo : C.naranja,
+        titulo: caducado
+            ? 'Certificado caducado: no se puede firmar'
+            : 'El certificado caduca en ${c.dias} día${c.dias == 1 ? '' : 's'} (${_fecha(c.caduca)})',
+        detalle: '${c.titular ?? 'Certificado'} · renuévalo y cambia $donde',
+      ));
+    }
+    // Ventas hechas sin internet en ESTE equipo que aún no han subido
+    if (cola.n > 0) {
+      final desde = cola.desde;
+      _avisos.add((
+        icono: Icons.cloud_upload_outlined,
+        color: desde != null && ahora.difference(desde) > const Duration(hours: 12) ? rojo : C.naranja,
+        titulo: '${cola.n} venta${cola.n == 1 ? '' : 's'} sin subir en este equipo'
+            '${desde == null ? '' : ' desde ${desde.day == ahora.day && ahora.difference(desde).inHours < 24 ? hhmm(desde) : '${_fecha(desde)} ${hhmm(desde)}'}'}',
+        detalle: 'Se suben solas al volver internet. No desinstales la app ni borres sus datos hasta entonces',
+      ));
+    }
     // Empleados con turno que no han fichado
     final faltan = <String>{};
     for (final c in cuadrante) {
@@ -185,14 +218,19 @@ class _PanelHoyPageState extends State<PanelHoyPage> {
           titulo: '${abiertas.length} cuentas abiertas · ${euros(abiertas.fold(0.0, (s, p) => s + n(p['total'])))}',
           detalle: 'Pendiente de cobrar'));
     }
-    // Copia de seguridad
-    if (_copia == null || _copia!['estado'] != 'ok' || (_copia!['mes'] as String).compareTo(_mesAnterior()) < 0) {
+    // Copia de seguridad: se hace sola cada día; avisa si la última buena tiene más de 2 días
+    final okEn = copiaOk == null ? null : DateTime.parse(copiaOk['creado_en'] as String).toLocal();
+    final ultimoError = _copia?['estado'] == 'error' ? 'Último intento: ${_copia!['detalle']}' : null;
+    if (okEn == null || ahora.difference(okEn) > const Duration(days: 2)) {
       _avisos.add((
         icono: Icons.cloud_off_outlined,
         color: rojo,
-        titulo: _copia == null ? 'Nunca se ha hecho copia en Google Drive' : 'Falta la copia de ${_mesAnterior()} en Drive',
-        detalle: _copia?['estado'] == 'error' ? 'Último intento: ${_copia!['detalle']}' : 'Pulsa "Hacer copia ahora" abajo',
+        titulo: okEn == null ? 'Nunca se ha hecho copia en Google Drive' : 'La última copia en Drive es del ${_fecha(okEn)}',
+        detalle: ultimoError ?? 'La copia automática no está funcionando: pulsa "Hacer copia ahora" abajo',
       ));
+    } else if (ultimoError != null) {
+      _avisos.add((icono: Icons.cloud_off_outlined, color: C.naranja, titulo: 'Falló la última copia en Drive',
+          detalle: ultimoError));
     }
   }
 
@@ -200,12 +238,13 @@ class _PanelHoyPageState extends State<PanelHoyPage> {
     setState(() => _copiando = true);
     try {
       exigirConexion();
-      final r = await supabase.functions.invoke('copia-mensual', body: {'mes': _mesAnterior()});
+      // Sin mes: la función guarda el mes en curso (y los días 1 y 2 también el anterior)
+      final r = await supabase.functions.invoke('copia-mensual', body: const <String, dynamic>{});
       final res = ((r.data as Map)['resultados'] as List?)?.cast<Map>() ?? [];
       final ok = res.isNotEmpty && res.every((x) => x['ok'] == true);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(ok ? 'Copia de ${_mesAnterior()} guardada en Google Drive' : 'La copia falló: ${res.firstOrNull?['detalle']}')));
+            content: Text(ok ? 'Copia guardada en Google Drive' : 'La copia falló: ${(res.where((x) => x['ok'] != true).firstOrNull ?? const {})['detalle']}')));
       }
     } on FunctionException catch (e) {
       if (mounted) {
@@ -317,7 +356,8 @@ class _PanelHoyPageState extends State<PanelHoyPage> {
                 child: Text(
                   _copia == null
                       ? 'Copia en Google Drive: ninguna todavía'
-                      : 'Última copia: ${_copia!['mes']} · ${_copia!['estado'] == 'ok' ? (_copia!['detalle'] ?? 'ok') : 'error: ${_copia!['detalle'] ?? '¿?'}'}',
+                      : 'Última copia (${_fecha(DateTime.parse(_copia!['creado_en'] as String).toLocal())}, mes ${_copia!['mes']}): '
+                          '${_copia!['estado'] == 'ok' ? (_copia!['detalle'] ?? 'ok') : 'error: ${_copia!['detalle'] ?? '¿?'}'}',
                   style: const TextStyle(fontSize: 13),
                 ),
               ),

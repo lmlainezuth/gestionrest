@@ -1,13 +1,18 @@
-// GestiónRest · copia de seguridad mensual en Google Drive.
-// Guarda en un .zip las facturas (con su XML firmado), anulaciones, ventas, caja, gastos,
-// fichajes, cuadrante, stock y registro de anulaciones del mes, y lo sube a
-// Drive › "GestionRest - Copias" › <empresa>. Conservar: facturas 4-6 años, fichajes 4 años.
+// GestiónRest · copia de seguridad en Google Drive (un zip por empresa y mes).
+// Guarda en un .zip las facturas (con su XML firmado y la respuesta de Hacienda), anulaciones,
+// subsanaciones, ventas, caja, gastos, fichajes, cuadrante, stock y registro de anulaciones del
+// mes, y lo sube a Drive › "GestionRest - Copias" › <empresa> › <empresa>_<mes>.zip (si ya
+// existe, lo sustituye). Conservar: facturas 4-6 años, fichajes 4 años.
 //
 // La llaman:
-//  · pg_cron el día 2 de cada mes (cabecera x-copia-secreto = secreto COPIA_SECRETO) → todas las empresas, mes anterior
-//  · el administrador desde la app ("Hacer copia ahora") → su empresa; body {mes: "2026-10"} opcional
+//  · pg_cron TODOS LOS DÍAS (cabecera x-copia-secreto = secreto COPIA_SECRETO) → todas las
+//    empresas, mes en curso; los días 1 y 2 también el mes anterior, para cerrarlo completo.
+//    Si algo falla, correo a AVISOS_CORREO (si están RESEND_API_KEY y AVISOS_CORREO).
+//  · el administrador desde la app ("Hacer copia ahora") → su empresa, igual; body {mes: "2026-10"} opcional
 //
-// Secretos: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN, COPIA_SECRETO
+// Secretos: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN, COPIA_SECRETO;
+// para el aviso: RESEND_API_KEY, AVISOS_CORREO (tu correo; con el remitente de pruebas de Resend
+// solo llega al correo de tu cuenta de Resend) y opcional RESUMEN_DE.
 import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2";
 import JSZip from "npm:jszip@3.10.1";
 
@@ -28,10 +33,18 @@ function inicioMes(anio: number, mes: number): string {
   const aprox = new Date(Date.UTC(anio, mes - 1, 1, 12));
   return `${anio}-${String(mes).padStart(2, "0")}-01T00:00:00${offsetMadrid(aprox)}`;
 }
-function mesAnterior(): string {
-  const hoy = new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Madrid" }));
-  const d = new Date(hoy.getFullYear(), hoy.getMonth() - 1, 1);
+function hoyMadrid(): Date {
+  return new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Madrid" }));
+}
+function textoMes(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+/** Mes en curso y, los días 1 y 2, también el anterior (para que quede completo). */
+function mesesACopiar(): string[] {
+  const hoy = hoyMadrid();
+  const actual = textoMes(hoy);
+  if (hoy.getDate() > 2) return [actual];
+  return [textoMes(new Date(hoy.getFullYear(), hoy.getMonth() - 1, 1)), actual];
 }
 
 // ---------- Lectura completa (Supabase corta en 1000 filas) ----------
@@ -42,6 +55,16 @@ async function todo(q: () => any): Promise<any[]> {
     if (error) throw new Error(error.message);
     filas.push(...data);
     if (data.length < 1000) return filas;
+  }
+}
+
+/** Para tablas de migraciones recientes (0025, 0026): si aún no existen, la copia sigue. */
+async function siExiste(p: Promise<any[]>): Promise<any[]> {
+  try {
+    return await p;
+  } catch (e) {
+    if (/schema cache|does not exist/i.test(String((e as Error).message ?? e))) return [];
+    throw e;
   }
 }
 
@@ -143,6 +166,7 @@ async function copiar(db: SupabaseClient, token: string, empresa: { id: string; 
   const datos: Record<string, any[]> = {
     facturas: await porFecha("facturas", "fecha"),
     tbai_anulaciones: await porFecha("tbai_anulaciones", "fecha"),
+    tbai_subsanaciones: await siExiste(porFecha("tbai_subsanaciones", "fecha")),
     pedidos: await porFecha("pedidos", "creado_en"),
     pedido_detalle: await porFecha("pedido_detalle", "creado_en"),
     pagos: await porFecha("pagos", "creado_en"),
@@ -161,6 +185,7 @@ async function copiar(db: SupabaseClient, token: string, empresa: { id: string; 
     clientes: await maestro("clientes"),
     articulos_stock: await maestro("articulos_stock"),
     empresa_tbai: await maestro("tbai_config", "nif, razon_social, entorno, licencia_tbai, nif_desarrollador, nombre_software, version_software"),
+    series: await siExiste(maestro("tbai_series")),
   };
   const equipo = await todo(() =>
     db.from("empresa_usuarios").select("usuario_id, rol, activo, perfiles(nombre)").eq("empresa_id", e).order("usuario_id"));
@@ -175,7 +200,10 @@ async function copiar(db: SupabaseClient, token: string, empresa: { id: string; 
     ``,
     `datos/*.json        Todas las tablas del mes, completas (para restaurar).`,
     `*.csv               Lo mismo en tabla, para abrir con Excel (separador ;).`,
-    `ticketbai/*.xml     Facturas y anulaciones firmadas tal como se enviaron a Hacienda.`,
+    `ticketbai/          Ficheros TicketBAI tal como se enviaron a Hacienda, por serie-número:`,
+    `  facturas/         SERIE-NUMERO.xml (firmado) y SERIE-NUMERO.respuesta.json (lo que contestó Hacienda)`,
+    `  anulaciones/      SERIE-NUMERO.xml de la factura anulada y su respuesta`,
+    `  subsanaciones/    SERIE-NUMERO_FECHA.xml (Zuzendu) y su respuesta`,
     ``,
     `Conservar: facturas 4-6 años (Hacienda), registro de jornada 4 años (art. 34.9 ET).`,
   ].join("\r\n"));
@@ -186,8 +214,34 @@ async function copiar(db: SupabaseClient, token: string, empresa: { id: string; 
   zip.file("caja_diaria.csv", csv(datos.cajas_diarias, ["fecha", "total", "efectivo", "tarjeta", "estado", "notas"]));
   zip.file("fichajes.csv", csv(datos.fichajes, ["nombre", "tipo", "momento", "origen", "motivo", "registrado_en"]));
   zip.file("anulaciones.csv", csv(datos.registro_anulaciones, ["momento", "tipo", "descripcion", "cantidad", "importe", "mesa", "motivo"]));
-  for (const f of datos.facturas) zip.file(`ticketbai/facturas/${f.serie}-${f.numero}.xml`, f.xml ?? "");
-  for (const a of datos.tbai_anulaciones) zip.file(`ticketbai/anulaciones/${a.factura_id}.xml`, a.xml ?? "");
+  // Serie y número de las facturas anuladas o subsanadas (pueden ser de un mes anterior)
+  const numeros = new Map<string, string>(datos.facturas.map((f) => [f.id, `${f.serie}-${f.numero}`]));
+  const faltan = [...new Set([...datos.tbai_anulaciones, ...datos.tbai_subsanaciones]
+    .map((x) => x.factura_id as string).filter((id) => !numeros.has(id)))];
+  for (let i = 0; i < faltan.length; i += 100) {
+    const { data, error } = await db.from("facturas").select("id, serie, numero").in("id", faltan.slice(i, i + 100));
+    if (error) throw new Error(error.message);
+    for (const f of data ?? []) numeros.set(f.id, `${f.serie}-${f.numero}`);
+  }
+  const respuesta = (texto: string | null) => {
+    if (!texto) return null;
+    try {
+      return JSON.stringify(JSON.parse(texto), null, 1);
+    } catch (_) {
+      return texto;
+    }
+  };
+  const ficheros = (carpeta: string, nombre: string, x: any) => {
+    zip.file(`ticketbai/${carpeta}/${nombre}.xml`, x.xml ?? "");
+    const r = respuesta(x.respuesta_envio);
+    if (r) zip.file(`ticketbai/${carpeta}/${nombre}.respuesta.json`, r);
+  };
+  for (const f of datos.facturas) ficheros("facturas", `${f.serie}-${f.numero}`, f);
+  for (const a of datos.tbai_anulaciones) ficheros("anulaciones", numeros.get(a.factura_id) ?? a.factura_id, a);
+  for (const s of datos.tbai_subsanaciones) {
+    const cuando = String(s.fecha).replace(/[^0-9]/g, "").slice(0, 14);
+    ficheros("subsanaciones", `${numeros.get(s.factura_id) ?? s.factura_id}_${cuando}`, s);
+  }
 
   const bytes = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
   const raiz = await carpeta(token, "GestionRest - Copias", null);
@@ -202,16 +256,46 @@ async function copiar(db: SupabaseClient, token: string, empresa: { id: string; 
   };
 }
 
+// ---------- Aviso por correo si la copia automática falla ----------
+async function avisarFallo(fallos: { empresa: string; mes: string; detalle: string }[]) {
+  const clave = (Deno.env.get("RESEND_API_KEY") ?? "").trim();
+  const para = (Deno.env.get("AVISOS_CORREO") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (!clave || para.length === 0 || fallos.length === 0) return;
+  const texto = [
+    "La copia automática de GestiónRest en Google Drive ha fallado:",
+    "",
+    ...fallos.map((f) => `· ${f.empresa} (${f.mes}): ${f.detalle}`),
+    "",
+    "Mañana se vuelve a intentar sola. Si sigue fallando, mira el panel de GestiónRest o los",
+    "registros de la función copia-mensual en Supabase.",
+  ].join("\n");
+  try {
+    await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${clave}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from: Deno.env.get("RESUMEN_DE") ?? "GestionRest <onboarding@resend.dev>",
+        to: para,
+        subject: `GestiónRest: falló la copia en Drive (${fallos.length})`,
+        text: texto,
+      }),
+    });
+  } catch (_) {
+    // Si tampoco sale el correo, queda el aviso del panel (copias_seguridad)
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
   const cuerpo = await req.json().catch(() => ({}));
-  const mes = /^\d{4}-\d{2}$/.test(cuerpo?.mes ?? "") ? cuerpo.mes as string : mesAnterior();
+  const meses = /^\d{4}-\d{2}$/.test(cuerpo?.mes ?? "") ? [cuerpo.mes as string] : mesesACopiar();
 
   // ¿Quién llama? pg_cron (secreto) → todas; administrador → la suya
   let empresas: { id: string; nombre: string }[];
   const secreto = Deno.env.get("COPIA_SECRETO");
-  if (secreto && req.headers.get("x-copia-secreto") === secreto) {
+  const automatica = !!secreto && req.headers.get("x-copia-secreto") === secreto;
+  if (automatica) {
     const { data } = await db.from("empresa").select("id, nombre");
     empresas = data ?? [];
   } else {
@@ -232,22 +316,28 @@ Deno.serve(async (req) => {
   } catch (err) {
     const detalle = String((err as Error).message ?? err);
     for (const e of empresas) {
-      await db.from("copias_seguridad").insert({ empresa_id: e.id, mes, estado: "error", detalle });
+      await db.from("copias_seguridad").insert({ empresa_id: e.id, mes: meses.at(-1), estado: "error", detalle });
     }
+    if (automatica) await avisarFallo(empresas.map((e) => ({ empresa: e.nombre, mes: meses.join(", "), detalle })));
     return json({ error: detalle }, 500);
   }
 
   const resultados = [];
-  for (const e of empresas) {
-    try {
-      const r = await copiar(db, token, e, mes);
-      await db.from("copias_seguridad").insert({ empresa_id: e.id, mes, estado: "ok", ...r });
-      resultados.push({ empresa: e.nombre, ok: true, ...r });
-    } catch (err) {
-      const detalle = String((err as Error).message ?? err);
-      await db.from("copias_seguridad").insert({ empresa_id: e.id, mes, estado: "error", detalle });
-      resultados.push({ empresa: e.nombre, ok: false, detalle });
+  for (const mes of meses) {
+    for (const e of empresas) {
+      try {
+        const r = await copiar(db, token, e, mes);
+        await db.from("copias_seguridad").insert({ empresa_id: e.id, mes, estado: "ok", ...r });
+        resultados.push({ empresa: e.nombre, mes, ok: true, ...r });
+      } catch (err) {
+        const detalle = String((err as Error).message ?? err);
+        await db.from("copias_seguridad").insert({ empresa_id: e.id, mes, estado: "error", detalle });
+        resultados.push({ empresa: e.nombre, mes, ok: false, detalle });
+      }
     }
   }
-  return json({ mes, resultados });
+  if (automatica) {
+    await avisarFallo(resultados.filter((r) => !r.ok).map((r) => ({ empresa: r.empresa, mes: r.mes, detalle: String(r.detalle) })));
+  }
+  return json({ meses, resultados });
 });

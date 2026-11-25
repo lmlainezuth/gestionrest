@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../core/conexion.dart';
 import '../../main.dart';
 import '../barra/venta_offline.dart';
+import 'caducidad_certificados.dart';
 import 'facturacion_service.dart';
 
 /// Estado TicketBAI que se avisa en todas las pantallas.
@@ -14,7 +15,10 @@ class EstadoTbai {
   final String entorno; // simulado | pruebas | produccion
   final int locales; // ventas hechas sin internet en este equipo, aún sin subir
   final String? errorLocal; // por qué no se pudieron subir (si no es la falta de conexión)
-  const EstadoTbai(this.pendientes, this.rechazadas, this.entorno, [this.locales = 0, this.errorLocal]);
+  final DateTime? localesDesde; // la más antigua de esas ventas
+  final int? certDias; // días que le quedan al certificado de este equipo (null: no tiene)
+  const EstadoTbai(this.pendientes, this.rechazadas, this.entorno,
+      [this.locales = 0, this.errorLocal, this.localesDesde, this.certDias]);
   static const vacio = EstadoTbai(0, 0, 'produccion');
 }
 
@@ -40,9 +44,7 @@ class EnviosPendientes {
     if (_enMarcha || supabase.auth.currentSession == null) return;
     if (!Conexion.enLinea.value) {
       // Sin conexión no se intenta nada: solo se cuenta lo guardado en el equipo
-      final locales = (await VentaOffline.cola()).length;
-      estado.value = EstadoTbai(estado.value.pendientes, estado.value.rechazadas, estado.value.entorno, locales,
-          VentaOffline.ultimoError);
+      estado.value = await estadoLocal(estado.value.pendientes, estado.value.rechazadas, estado.value.entorno);
       return;
     }
     _enMarcha = true;
@@ -53,10 +55,8 @@ class EnviosPendientes {
       try {
         await VentaOffline.refrescarCopia();
       } catch (_) {}
-      final locales = (await VentaOffline.cola()).length;
-      if (locales > 0) {
-        estado.value = EstadoTbai(estado.value.pendientes, estado.value.rechazadas, estado.value.entorno, locales,
-            VentaOffline.ultimoError);
+      if ((await VentaOffline.cola()).isNotEmpty) {
+        estado.value = await estadoLocal(estado.value.pendientes, estado.value.rechazadas, estado.value.entorno);
       }
       final config = await supabase.from('tbai_config').select('entorno').limit(1).maybeSingle();
       final entorno = (config?['entorno'] as String?) ?? 'simulado';
@@ -97,22 +97,34 @@ class EnviosPendientes {
           .select('id, facturas!inner(legado)')
           .eq('estado_envio', 'error')
           .eq('facturas.legado', false);
-      estado.value = EstadoTbai(
+      estado.value = await estadoLocal(
         (quedan as List).length + (quedanAnul as List).length,
         (rechazadas as List).length + (rechAnul as List).length,
         entorno,
-        locales,
-        VentaOffline.ultimoError,
       );
     } catch (_) {
       // Sin conexión con el servidor: se reintenta en la próxima vuelta
-      final locales = (await VentaOffline.cola()).length;
-      estado.value = EstadoTbai(estado.value.pendientes, estado.value.rechazadas, estado.value.entorno, locales,
-          VentaOffline.ultimoError);
+      estado.value = await estadoLocal(estado.value.pendientes, estado.value.rechazadas, estado.value.entorno);
     } finally {
       _enMarcha = false;
     }
   }
+
+  /// Estado con lo que solo sabe este equipo: ventas sin subir (y desde cuándo) y certificado.
+  static Future<EstadoTbai> estadoLocal(int pendientes, int rechazadas, String entorno) async {
+    final c = await VentaOffline.resumenCola();
+    return EstadoTbai(pendientes, rechazadas, entorno, c.n, VentaOffline.ultimoError, c.desde,
+        await CaducidadCertificados.diasEquipo());
+  }
+}
+
+String _desde(DateTime? d) {
+  if (d == null) return '';
+  final ahora = DateTime.now();
+  String dos(int n) => n.toString().padLeft(2, '0');
+  final hora = '${dos(d.hour)}:${dos(d.minute)}';
+  final hoy = d.year == ahora.year && d.month == ahora.month && d.day == ahora.day;
+  return hoy ? ' desde las $hora' : ' desde el ${dos(d.day)}/${dos(d.month)} a las $hora';
 }
 
 /// Franja de aviso arriba de todas las pantallas (va en MaterialApp.builder).
@@ -133,7 +145,8 @@ class _AvisoTbaiState extends State<AvisoTbai> {
     EnviosPendientes.iniciar();
     _sub = supabase.auth.onAuthStateChange.listen((e) {
       if (e.session == null) {
-        EnviosPendientes.estado.value = EstadoTbai.vacio;
+        // Sin sesión se sigue avisando de lo guardado en el equipo: no se pierde al cerrar sesión
+        EnviosPendientes.estadoLocal(0, 0, 'produccion').then((v) => EnviosPendientes.estado.value = v);
       } else {
         EnviosPendientes.revisar();
       }
@@ -158,12 +171,19 @@ class _AvisoTbaiState extends State<AvisoTbai> {
           if (e.entorno == 'simulado') 'MODO SIMULADO: los tickets NO se envían a Hacienda',
           if (e.entorno == 'pruebas') 'ENTORNO DE PRUEBAS: los tickets no tienen validez fiscal',
           if (e.rechazadas > 0) '${e.rechazadas} rechazada${e.rechazadas == 1 ? '' : 's'} por Hacienda: revisa Facturas',
-          if (e.locales > 0) '${e.locales} venta${e.locales == 1 ? '' : 's'} sin internet guardada${e.locales == 1 ? '' : 's'} en este equipo (se suben solas)',
+          if (e.locales > 0)
+            '${e.locales} venta${e.locales == 1 ? '' : 's'} sin subir en este equipo${_desde(e.localesDesde)} '
+                '(se suben solas al volver internet): no desinstales la app ni borres sus datos',
+          if (e.certDias != null && e.certDias! < 0) 'CERTIFICADO DE ESTE EQUIPO CADUCADO: no puede firmar',
+          if (e.certDias != null && e.certDias! >= 0 && e.certDias! <= CaducidadCertificados.diasAviso)
+            'El certificado de este equipo caduca en ${e.certDias} día${e.certDias == 1 ? '' : 's'}: avisa al encargado',
           if (e.errorLocal != null) 'No se pudieron subir: ${e.errorLocal}',
           if (e.pendientes > 0) '${e.pendientes} sin enviar a Hacienda (se reintenta solo)',
         ];
         if (textos.isEmpty) return widget.child;
-        final grave = e.entorno != 'produccion' || e.rechazadas > 0 || e.errorLocal != null;
+        final grave = e.entorno != 'produccion' || e.rechazadas > 0 || e.errorLocal != null ||
+            (e.certDias != null && e.certDias! <= 7) ||
+            (e.localesDesde != null && DateTime.now().difference(e.localesDesde!) > const Duration(hours: 12));
         return Column(children: [
           Material(
             color: grave ? const Color(0xFFB3261E) : const Color(0xFFB45309),
