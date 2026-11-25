@@ -17,10 +17,13 @@ import 'tbai_xml.dart';
 /// identificador y el QR, guarda y envía. También anula, rectifica y
 /// convierte un ticket en factura con NIF.
 class FacturacionService {
-  Future<Map<String, dynamic>> _config() => supabase.from('tbai_config').select().limit(1).single();
+  // Licencia y NIF del desarrollador: si la empresa no los tiene escritos, los del programa
+  Future<Map<String, dynamic>> _config() async =>
+      Software.completar(await supabase.from('tbai_config').select().limit(1).single());
 
   /// En producción no se emite nada con datos de prueba o sin licencia.
-  static void comprobarConfig(Map<String, dynamic> config) {
+  static void comprobarConfig(Map<String, dynamic> configEmpresa) {
+    final config = Software.completar(configEmpresa);
     if (config['entorno'] != 'produccion') return;
     final licencia = (config['licencia_tbai'] as String?)?.trim() ?? '';
     if (licencia.isEmpty || licencia.startsWith('TBAIGIPRE') || licencia == 'SIN-LICENCIA') {

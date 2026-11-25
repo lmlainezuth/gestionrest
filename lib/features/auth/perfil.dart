@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/permisos.dart';
 import '../../core/red.dart';
+import '../../core/software.dart';
 import '../../main.dart';
 
 enum Rol { admin, camarero, cocinero }
@@ -49,6 +50,8 @@ class Perfil {
       final filas = await supabase.rpc('mi_perfil') as List;
       if (filas.isEmpty) return cache = null;
       m = Map<String, dynamic>.from(filas.first as Map);
+      // Datos del programa (licencia, desarrollador) al día en este equipo
+      Software.cargar().ignore();
       // Copia en el equipo: si se abre la app sin internet, se entra con el último perfil
       SharedPreferences.getInstance().then((p) => p.setString('perfil_$uid', jsonEncode(m))).ignore();
     } catch (e) {

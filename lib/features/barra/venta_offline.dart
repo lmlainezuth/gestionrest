@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/certificado_equipo.dart';
 import '../../core/red.dart';
+import '../../core/software.dart';
 import '../../main.dart';
 import '../ticketbai/cadena_equipo.dart';
 import '../ticketbai/caducidad_certificados.dart';
@@ -240,7 +241,7 @@ class VentaOffline {
       Map<String, dynamic>? pedidoIn, List<Map<String, dynamic>> detalleNuevo, String metodo, double? entregado) async {
     final p = await SharedPreferences.getInstance();
     final ctx = Map<String, dynamic>.from(jsonDecode(p.getString(_kContexto)!) as Map);
-    final config = Map<String, dynamic>.from(ctx['config'] as Map);
+    final config = Software.completar(Map<String, dynamic>.from(ctx['config'] as Map));
     FacturacionService.comprobarConfig(config);
     final cadena = (await CadenaEquipo.serie())!;
 

@@ -95,28 +95,70 @@ class _AdminHomeState extends State<AdminHome> {
     if (r == null || r == widget.perfil.empresaId) return;
     var id = r;
     if (r == '+') {
-      final ctrl = TextEditingController();
       if (!mounted) return;
-      final nombre = await showDialog<String>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Nueva empresa'),
-          content: SizedBox(
-            width: 360,
-            child: TextField(controller: ctrl, autofocus: true, decoration: const InputDecoration(labelText: 'Nombre del negocio')),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('Crear')),
-          ],
-        ),
-      );
-      if (nombre == null || nombre.isEmpty) return;
-      id = await supabase.rpc('crear_empresa', params: {'p_nombre': nombre}) as String;
+      final datos = await _pedirNuevaEmpresa();
+      if (datos == null) return;
+      id = await supabase.rpc('crear_empresa',
+          params: {'p_nombre': datos.nombre, 'p_nif': datos.nif, 'p_razon': datos.titular}) as String;
     }
     await supabase.rpc('usar_empresa', params: {'p_empresa': id});
     await EmpresaDispositivo.guardar(id);
     recargaApp.value++;
+  }
+
+  /// Nombre del bar y titular (quien factura): así la empresa nace con su NIF y su serie.
+  Future<({String nombre, String titular, String nif})?> _pedirNuevaEmpresa() {
+    final form = GlobalKey<FormState>();
+    final nombre = TextEditingController(), titular = TextEditingController(), nif = TextEditingController();
+    return showDialog<({String nombre, String titular, String nif})>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Nueva empresa'),
+        content: SizedBox(
+          width: 400,
+          child: Form(
+            key: form,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              TextFormField(
+                controller: nombre,
+                autofocus: true,
+                decoration: const InputDecoration(labelText: 'Nombre del bar', helperText: 'El que sale arriba en el ticket'),
+                validator: (v) => (v ?? '').trim().isEmpty ? 'Obligatorio' : null,
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: titular,
+                textCapitalization: TextCapitalization.characters,
+                decoration: const InputDecoration(
+                    labelText: 'Titular (quien factura)', helperText: 'Nombre y apellidos del autónomo, o la razón social'),
+                validator: (v) => (v ?? '').trim().isEmpty ? 'Obligatorio' : null,
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: nif,
+                textCapitalization: TextCapitalization.characters,
+                decoration: const InputDecoration(labelText: 'NIF del titular'),
+                validator: (v) => (v ?? '').trim().length == 9 ? null : 'El NIF tiene 9 caracteres',
+              ),
+            ]),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+          FilledButton(
+            onPressed: () {
+              if (!form.currentState!.validate()) return;
+              Navigator.pop(ctx, (
+                nombre: nombre.text.trim(),
+                titular: titular.text.trim().toUpperCase(),
+                nif: nif.text.trim().toUpperCase(),
+              ));
+            },
+            child: const Text('Crear'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override

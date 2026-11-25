@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'core/conexion.dart';
 import 'core/config.dart';
+import 'core/software.dart';
 import 'core/tema.dart';
 import 'features/auth/auth_gate.dart';
 import 'features/ticketbai/envios_pendientes.dart';
@@ -23,6 +24,7 @@ Future<void> main() async {
     httpClient: ClienteConLimite(),
   );
   Conexion.iniciar();
+  await Software.cargarCopia(); // datos del programa guardados en el equipo (sin internet)
   runApp(const GestionRestApp());
 }
 

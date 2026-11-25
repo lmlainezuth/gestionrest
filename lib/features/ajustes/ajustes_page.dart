@@ -6,6 +6,7 @@ import 'clientes_tab.dart';
 import 'copias_tab.dart';
 import 'empresa_tab.dart';
 import 'impresoras_tab.dart';
+import 'programa_tab.dart';
 import 'salones_tab.dart';
 
 /// Configuración del negocio.
@@ -20,5 +21,7 @@ class AjustesPage extends StatelessWidget {
         (texto: 'Clientes', icono: Icons.badge_outlined, permiso: 'ajustes', pagina: () => const ClientesTab()),
         (texto: 'Impresoras', icono: Icons.print_outlined, permiso: 'ajustes', pagina: () => const ImpresorasTab()),
         (texto: 'Copias', icono: Icons.backup_outlined, permiso: 'ajustes', pagina: () => const CopiasTab()),
+        // Solo el programador (migración 0030): licencias y datos del desarrollador, para todos los bares
+        (texto: 'Programa', icono: Icons.code, permiso: 'programa', pagina: () => const ProgramaTab()),
       ]);
 }

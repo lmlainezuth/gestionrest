@@ -32,7 +32,7 @@ Future<void> mostrarVerificacionPresencial(BuildContext context) async {
             const SizedBox(height: 6),
             Text('Declaración responsable', style: titulo(16)),
             const SizedBox(height: 6),
-            const SelectableText(Software.declaracionResponsable, style: TextStyle(fontSize: 14, height: 1.4)),
+            SelectableText(Software.declaracionResponsable, style: const TextStyle(fontSize: 14, height: 1.4)),
           ]),
         ),
       ),

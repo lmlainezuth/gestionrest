@@ -34,8 +34,6 @@ class _EmpresaTabState extends State<EmpresaTab> {
   final _telefono = TextEditingController();
   String? _serieEquipo; // serie propia de este equipo (cobro sin internet); la asigna la base de datos
   bool _asignando = false;
-  final _licencia = TextEditingController();
-  final _nifDesarrollador = TextEditingController();
   String _entorno = 'simulado';
   String? _certificado;
   bool _probando = false;
@@ -60,8 +58,6 @@ class _EmpresaTabState extends State<EmpresaTab> {
       _nif.text = _tbai!['nif'] as String? ?? '';
       _direccion.text = _empresa!['direccion'] as String? ?? '';
       _telefono.text = _empresa!['telefono'] as String? ?? '';
-      _licencia.text = _tbai!['licencia_tbai'] as String? ?? '';
-      _nifDesarrollador.text = _tbai!['nif_desarrollador'] as String? ?? '';
       _entorno = _tbai!['entorno'] as String? ?? 'simulado';
       _certEquipo = (await CertificadoEquipo.leer())?.nombre;
       _serieEquipo = await CadenaEquipo.serie();
@@ -82,8 +78,6 @@ class _EmpresaTabState extends State<EmpresaTab> {
       if (_entorno == 'produccion' && _tbai!['entorno'] != 'produccion') {
         FacturacionService.comprobarConfig({
           'entorno': 'produccion',
-          'licencia_tbai': _licencia.text.trim(),
-          'nif_desarrollador': _nifDesarrollador.text.trim(),
           'nif': nif,
         });
       }
@@ -103,8 +97,6 @@ class _EmpresaTabState extends State<EmpresaTab> {
       await supabase.from('tbai_config').update({
         'nif': nif,
         'razon_social': _razon.text.trim(),
-        'licencia_tbai': _licencia.text.trim().isEmpty ? null : _licencia.text.trim(),
-        'nif_desarrollador': _nifDesarrollador.text.trim().isEmpty ? null : _nifDesarrollador.text.trim().toUpperCase(),
         'entorno': _entorno,
       }).eq('id', _tbai!['id']);
       var aviso = 'Datos guardados';
@@ -242,11 +234,7 @@ class _EmpresaTabState extends State<EmpresaTab> {
                       );
                       if (ok != true) return;
                     }
-                    setState(() {
-                      _entorno = v;
-                      // Licencia de pruebas que publica Gipuzkoa para su entorno de pruebas
-                      if (v == 'pruebas' && _licencia.text.trim().isEmpty) _licencia.text = 'TBAIGIPRE00000001337';
-                    });
+                    setState(() => _entorno = v);
                   },
                 ),
                 const SizedBox(height: 8),
@@ -259,10 +247,18 @@ class _EmpresaTabState extends State<EmpresaTab> {
                   style: const TextStyle(color: C.gris, fontSize: 13),
                 ),
                 const SizedBox(height: 14),
-                campo(_licencia, 'Licencia TicketBAI', ayuda: 'En pruebas: TBAIGIPRE00000001337 (la nuestra). En producción, la que da Hacienda al registrar el software'),
-                campo(_nifDesarrollador, 'NIF del desarrollador del software', ayuda: 'El NIF de quien hace la app (va en cada factura)'),
-                Text('Software: ${Software.nombre} ${Software.version} · desarrollador ${Software.nifDesarrollador}',
-                    style: const TextStyle(color: C.gris, fontSize: 13)),
+                // Licencia y desarrollador son del programa: iguales en todos los bares (Ajustes › Programa)
+                Text(
+                  'Software: ${Software.nombre} ${Software.version} · desarrollador ${Software.nifDesarrollador}\n'
+                  'Licencia TicketBAI: ${switch (_entorno) {
+                    'produccion' => Software.licenciaProduccion.isEmpty
+                        ? 'pendiente (se pone en el programa cuando Hacienda lo inscriba)'
+                        : Software.licenciaProduccion,
+                    _ => Software.licenciaPruebas,
+                  }}\n'
+                  'Son del programa, iguales en todos los bares: se cambian en Ajustes › Programa',
+                  style: const TextStyle(color: C.gris, fontSize: 13),
+                ),
                 const Align(alignment: Alignment.centerLeft, child: BotonVerificacionTbai()),
                 const SizedBox(height: 8),
                 Row(children: [

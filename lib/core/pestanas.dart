@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../features/auth/perfil.dart';
+import 'software.dart';
 import 'tema.dart';
 
 typedef Pestana = ({String texto, IconData icono, String permiso, Widget Function() pagina});
@@ -13,7 +14,10 @@ class Pestanas extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = Perfil.cache;
-    final visibles = [for (final x in pestanas) if (p?.puede(x.permiso) ?? false) x];
+    final visibles = [
+      for (final x in pestanas)
+        if (x.permiso == 'programa' ? Software.esProgramador : (p?.puede(x.permiso) ?? false)) x
+    ];
     if (visibles.isEmpty) return const Center(child: Text('Sin permisos'));
     if (visibles.length == 1) return visibles.first.pagina();
     return DefaultTabController(
