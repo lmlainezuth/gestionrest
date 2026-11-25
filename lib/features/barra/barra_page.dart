@@ -314,7 +314,15 @@ class _BarraPageState extends State<BarraPage> {
       _cuenta = null;
       await _cargarCuentas();
       EnviosPendientes.revisar(); // actualiza el aviso de ventas guardadas
-      if (mounted) await ticketCobrado(context, factura);
+      if (mounted) {
+        await ticketCobrado(context, {
+          ...factura,
+          'pagos': [
+            {'metodo': pago.metodo, 'importe': total, 'entregado': pago.entregado},
+          ],
+          'origen': 'Barra',
+        });
+      }
       if (_modoMesa && mounted) {
         Navigator.pop(context, true); // mesa cobrada: vuelve al plano
         return;

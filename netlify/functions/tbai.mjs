@@ -78,11 +78,13 @@ export default async (req) => {
     });
     if (!u.ok) return json({ error: 'Sin sesión' }, 401);
 
-    const { xmlFirmado, entorno, baja } = await req.json();
+    const { xmlFirmado, entorno, baja, servicio } = await req.json();
     if (!xmlFirmado || !String(xmlFirmado).includes('SignatureValue')) return json({ error: 'Falta el XML firmado' }, 400);
     const host = entorno === 'produccion' ? 'tbai-z.egoitza.gipuzkoa.eus' : 'tbai-z.prep.gipuzkoa.eus';
     const cert = await leerCertificado(auth);
-    const r = await enviar(host, baja ? '/sarrerak/baja' : '/sarrerak/alta', xmlFirmado, cert);
+    // servicio: alta, baja o zuzendu-alta (subsanación). Las apps antiguas solo mandan "baja"
+    const ruta = ['alta', 'baja', 'zuzendu-alta'].includes(servicio) ? servicio : baja ? 'baja' : 'alta';
+    const r = await enviar(host, `/sarrerak/${ruta}`, xmlFirmado, cert);
     return json(r);
   } catch (e) {
     certificados.clear();

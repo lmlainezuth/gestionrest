@@ -6,10 +6,15 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayInputStream
+import java.net.URL
 import java.security.KeyStore
 import java.security.PrivateKey
 import java.security.Signature
 import java.security.cert.X509Certificate
+import javax.net.ssl.HttpsURLConnection
+import javax.net.ssl.KeyManagerFactory
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLSocketFactory
 
 class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -22,6 +27,8 @@ class MainActivity : FlutterActivity() {
     private var huella: Int? = null
     private var clavePrivada: PrivateKey? = null
     private var certificado: X509Certificate? = null
+    private var almacen: KeyStore? = null
+    private var fabrica: SSLSocketFactory? = null
 
     private fun abrir(p12: ByteArray, clave: String) {
         val h = p12.contentHashCode() * 31 + clave.hashCode()
@@ -32,7 +39,39 @@ class MainActivity : FlutterActivity() {
             ?: throw IllegalStateException("El certificado no contiene la clave privada")
         clavePrivada = ks.getKey(alias, clave.toCharArray()) as PrivateKey
         certificado = ks.getCertificate(alias) as X509Certificate
+        almacen = ks
+        fabrica = null
         huella = h
+    }
+
+    // Conexión segura que presenta el certificado del negocio (Hacienda lo pide para recibir las facturas)
+    private fun fabricaTls(clave: String): SSLSocketFactory {
+        fabrica?.let { return it }
+        val kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
+        kmf.init(almacen, clave.toCharArray())
+        val ctx = SSLContext.getInstance("TLS")
+        ctx.init(kmf.keyManagers, null, null)
+        return ctx.socketFactory.also { fabrica = it }
+    }
+
+    private fun enviar(f: SSLSocketFactory, url: String, xml: String): Map<String, Any> {
+        val c = URL(url).openConnection() as HttpsURLConnection
+        try {
+            c.sslSocketFactory = f
+            c.requestMethod = "POST"
+            c.doOutput = true
+            c.connectTimeout = 15000
+            c.readTimeout = 40000
+            c.setRequestProperty("Content-Type", "application/xml;charset=UTF-8")
+            val cuerpo = xml.toByteArray(Charsets.UTF_8)
+            c.setFixedLengthStreamingMode(cuerpo.size)
+            c.outputStream.use { it.write(cuerpo) }
+            val codigo = c.responseCode
+            val texto = (if (codigo >= 400) c.errorStream else c.inputStream)?.use { it.readBytes().toString(Charsets.UTF_8) } ?: ""
+            return mapOf("codigo" to codigo, "texto" to texto)
+        } finally {
+            c.disconnect()
+        }
     }
 
     // Firma TicketBAI en el propio TPV (sin internet): RSA-SHA256 con el certificado del negocio
@@ -83,6 +122,20 @@ class MainActivity : FlutterActivity() {
                         s.initSign(clavePrivada)
                         s.update(call.argument<ByteArray>("datos")!!)
                         result.success(s.sign())
+                    }
+                    "enviar" -> {
+                        // En segundo plano: Android no deja usar la red en el hilo principal
+                        val f = fabricaTls(clave)
+                        val url = call.argument<String>("url")!!
+                        val xml = call.argument<String>("xml")!!
+                        Thread {
+                            try {
+                                val r = enviar(f, url, xml)
+                                runOnUiThread { result.success(r) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("ENVIO", e.message ?: e.toString(), null) }
+                            }
+                        }.start()
                     }
                     else -> result.notImplemented()
                 }

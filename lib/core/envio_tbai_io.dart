@@ -1,14 +1,25 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:flutter/services.dart';
 
 /// Envía el XML firmado a Hacienda autenticándose con el certificado (.pfx) de este equipo.
 ///
 /// El servidor de Hacienda pide el certificado con una "renegociación" TLS, que el motor
 /// de Flutter (BoringSSL) no admite. En Windows se usa curl.exe, que viene con Windows y
-/// usa el sistema de seguridad de Windows (sí la admite).
+/// usa el sistema de seguridad de Windows (sí la admite). En Android se usa la conexión
+/// del propio sistema (MainActivity.kt), que también la admite.
 Future<(int, String)> enviarConCertificado(String url, String xml, List<int> p12, String clave) async {
   if (Platform.isWindows) return _conCurl(url, xml, p12, clave);
+  if (Platform.isAndroid) return _conAndroid(url, xml, p12, clave);
   return _conDart(url, xml, p12, clave);
+}
+
+Future<(int, String)> _conAndroid(String url, String xml, List<int> p12, String clave) async {
+  final r = Map<String, dynamic>.from(await const MethodChannel('gestionrest/firma')
+      .invokeMethod('enviar', {'p12': Uint8List.fromList(p12), 'clave': clave, 'url': url, 'xml': xml}) as Map);
+  return (r['codigo'] as int, r['texto'] as String);
 }
 
 Future<(int, String)> _conCurl(String url, String xml, List<int> p12, String clave) async {

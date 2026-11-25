@@ -146,6 +146,35 @@ class TbaiXml {
         '</T:AnulaTicketBai>';
   }
 
+  /// Fichero de subsanación (o modificación) del servicio Zuzendu-alta de Gipuzkoa (OF 16/2022,
+  /// esquema ZuzenduAlta_ticketBai: urn:ticketbai:zuzendu-alta). No va firmado.
+  ///
+  /// Lleva los datos de la factura ya corregidos ([xmlCorregido]: un fichero de alta sin firmar
+  /// hecho con [construir]) y la MISMA huella del fichero original rechazado ([xmlOriginal]),
+  /// más los 100 primeros caracteres de su firma. El fichero original no se toca.
+  static String zuzenduAlta({
+    required String xmlCorregido,
+    required String xmlOriginal,
+    required String firmaOriginal,
+    bool modificar = false,
+  }) {
+    String bloque(String xml, String etiqueta) {
+      final a = xml.indexOf('<$etiqueta>'), b = xml.indexOf('</$etiqueta>');
+      if (a < 0 || b < a) throw FormatException('Zuzendu: falta <$etiqueta> en el fichero');
+      return xml.substring(a, b + etiqueta.length + 3);
+    }
+
+    final firma100 = firmaOriginal.length > 100 ? firmaOriginal.substring(0, 100) : firmaOriginal;
+    return '<?xml version="1.0" encoding="UTF-8"?>'
+        '<T:SubsanacionModificacionTicketBAI xmlns:T="urn:ticketbai:zuzendu-alta">'
+        '<Cabecera><IDVersion>1.0</IDVersion><Accion>${modificar ? 'MODIFICAR' : 'SUBSANAR'}</Accion></Cabecera>'
+        '${bloque(xmlCorregido, 'Sujetos')}'
+        '${bloque(xmlCorregido, 'Factura')}'
+        '${bloque(xmlOriginal, 'HuellaTBAI')}'
+        '<SignatureValueFirmaFactura>${_e(firma100)}</SignatureValueFirmaFactura>'
+        '</T:SubsanacionModificacionTicketBAI>';
+  }
+
   /// Escapa el texto tal como lo deja la canonicalización C14N (sin escapar comillas y sin
   /// caracteres de control): así el XML generado ya es su forma canónica y se puede firmar
   /// también en el propio equipo, sin internet.

@@ -31,9 +31,14 @@ class TicketView extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(factura['razon_social_emisor'] as String,
-              textAlign: TextAlign.center, style: negrita.copyWith(fontSize: 14)),
-          Text('NIF ${factura['nif_emisor']}', textAlign: TextAlign.center, style: mono),
+          FutureBuilder(
+            future: Impresion.cabecera(factura),
+            builder: (_, c) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              for (final (texto, grande)
+                  in c.data ?? [(factura['razon_social_emisor'] as String, true), ('NIF ${factura['nif_emisor']}', false)])
+                Text(texto, textAlign: TextAlign.center, style: grande ? negrita.copyWith(fontSize: 14) : mono),
+            ]),
+          ),
           linea,
           Text(factura['tipo'] == 'completa' ? 'FACTURA' : 'FACTURA SIMPLIFICADA', style: negrita),
           Text('Nº ${factura['serie']}-${factura['numero']}', style: mono),

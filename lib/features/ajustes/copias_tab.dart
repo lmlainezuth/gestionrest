@@ -23,6 +23,7 @@ class _CopiasTabState extends State<CopiasTab> {
     // Añadidas en 0016-0020
     'articulos_stock', 'escandallos', 'movimientos_stock', 'pedidos_proveedor', 'pedido_proveedor_lineas',
     'cuadrante', 'reservas', 'fichajes', 'registro_anulaciones',
+    'tbai_subsanaciones', // 0025
   ];
   bool _trabajando = false;
   String _estado = '';

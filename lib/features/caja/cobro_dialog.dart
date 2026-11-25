@@ -199,7 +199,15 @@ class _CobroDialogState extends State<CobroDialog> {
         if (widget.mesaId != null)
           supabase.from('mesas').update({'disponibilidad': 'libre'}).eq('id', widget.mesaId!),
       ]);
-      if (mounted) Navigator.pop(context, factura);
+      // Para el ticket: forma de pago y, en venta rápida, que es de barra
+      final paraTicket = {
+        ...factura,
+        'pagos': [
+          for (final p in _pagos) {'metodo': p.metodo, 'importe': p.importe, 'entregado': p.entregado},
+        ],
+        if (widget.mesaId == null) 'origen': 'Barra',
+      };
+      if (mounted) Navigator.pop(context, paraTicket);
     } catch (e) {
       setState(() {
         _cobrando = false;

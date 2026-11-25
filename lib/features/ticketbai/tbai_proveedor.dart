@@ -69,13 +69,13 @@ class ProveedorGipuzkoa implements TicketBaiProveedor {
 
   /// Envío por el servicio puente (Netlify, Node): para Android, web o equipos sin certificado.
   /// Hacienda pide una "renegociación" TLS que Flutter (BoringSSL) y Supabase no admiten.
-  Future<Map<String, dynamic>> _porPuente(String xmlFirmado, bool baja) async {
+  Future<Map<String, dynamic>> _porPuente(String xmlFirmado, String servicio) async {
     final token = supabase.auth.currentSession?.accessToken ?? '';
     final r = await http
         .post(
           Uri.parse(Config.puenteTbai),
           headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'},
-          body: jsonEncode({'xmlFirmado': xmlFirmado, 'entorno': entorno, 'baja': baja}),
+          body: jsonEncode({'xmlFirmado': xmlFirmado, 'entorno': entorno, 'baja': servicio == 'baja', 'servicio': servicio}),
         )
         .timeout(const Duration(seconds: 45));
     final d = Map<String, dynamic>.from(jsonDecode(r.body) as Map);
@@ -84,6 +84,25 @@ class ProveedorGipuzkoa implements TicketBaiProveedor {
     final res = leerRespuesta(texto);
     if (res['estado'] == null) res['descripcion'] = 'Respuesta HTTP ${d['http']}: ${texto.length > 300 ? texto.substring(0, 300) : texto}';
     return res;
+  }
+
+  /// Envío desde este equipo con su certificado. En Android, si no logra conectar así,
+  /// se intenta por el puente (necesita los secretos de la empresa en el servidor).
+  Future<Map<String, dynamic>> _conCertificado(String xmlFirmado, String servicio, List<int> p12, String clave) async {
+    try {
+      final url = '${_host[entorno]!}$servicio';
+      final (codigo, texto) = await enviarConCertificado(url, xmlFirmado, p12, clave);
+      final r = leerRespuesta(texto);
+      if (r['estado'] == null) r['descripcion'] = 'Respuesta HTTP $codigo: ${texto.length > 300 ? texto.substring(0, 300) : texto}';
+      return r;
+    } catch (e) {
+      if (defaultTargetPlatform != TargetPlatform.android || Config.puenteTbai.isEmpty) rethrow;
+      try {
+        return await _porPuente(xmlFirmado, servicio);
+      } catch (e2) {
+        throw StateError('Desde este equipo: $e · $e2');
+      }
+    }
   }
 
   Future<Map<String, dynamic>> _llamar(Map<String, dynamic> cuerpo) async {
@@ -131,18 +150,21 @@ class ProveedorGipuzkoa implements TicketBaiProveedor {
   }
 
   @override
-  Future<EnvioResultado> enviar(String xmlFirmado, {bool baja = false}) async {
+  Future<EnvioResultado> enviar(String xmlFirmado, {bool baja = false}) => _enviarA(baja ? 'baja' : 'alta', xmlFirmado);
+
+  /// Servicio Zuzendu-alta (OF 16/2022): subsanación de un fichero de alta rechazado. No va firmado.
+  Future<EnvioResultado> enviarZuzendu(String xml) => _enviarA('zuzendu-alta', xml);
+
+  /// [servicio]: alta, baja o zuzendu-alta (el final de la dirección del servicio de Hacienda).
+  Future<EnvioResultado> _enviarA(String servicio, String xmlFirmado) async {
     try {
       final Map<String, dynamic> r;
-      final cert = kIsWeb || defaultTargetPlatform != TargetPlatform.windows ? null : await CertificadoEquipo.leer();
+      final cert = kIsWeb || !FirmaEquipo.soportada ? null : await CertificadoEquipo.leer();
       if (cert != null) {
-        // Windows con certificado instalado: envía este equipo (curl.exe)
-        final url = '${_host[entorno]!}${baja ? 'baja' : 'alta'}';
-        final (codigo, texto) = await enviarConCertificado(url, xmlFirmado, cert.bytes, cert.clave);
-        r = leerRespuesta(texto);
-        if (r['estado'] == null) r['descripcion'] = 'Respuesta HTTP $codigo: ${texto.length > 300 ? texto.substring(0, 300) : texto}';
+        // Equipo con certificado instalado (Windows o Android): envía él mismo
+        r = await _conCertificado(xmlFirmado, servicio, cert.bytes, cert.clave);
       } else if (Config.puenteTbai.isNotEmpty) {
-        r = await _porPuente(xmlFirmado, baja);
+        r = await _porPuente(xmlFirmado, servicio);
       } else {
         throw StateError('Este equipo no puede enviar: instala el certificado (Windows) o configura el servicio puente');
       }

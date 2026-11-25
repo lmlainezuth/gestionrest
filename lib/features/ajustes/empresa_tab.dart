@@ -145,12 +145,14 @@ class _EmpresaTabState extends State<EmpresaTab> {
         _cargar();
       });
     }
-    Widget campo(TextEditingController c, String etiqueta, {String? Function(String?)? validar, String? ayuda}) =>
+    Widget campo(TextEditingController c, String etiqueta, {String? Function(String?)? validar, String? ayuda, int lineas = 1}) =>
         Padding(
           padding: const EdgeInsets.only(bottom: 14),
           child: TextFormField(
             controller: c,
             validator: validar,
+            minLines: 1,
+            maxLines: lineas,
             decoration: InputDecoration(labelText: etiqueta, helperText: ayuda),
           ),
         );
@@ -170,7 +172,7 @@ class _EmpresaTabState extends State<EmpresaTab> {
                 Text('Negocio', style: titulo(20)),
                 const SizedBox(height: 12),
                 campo(_nombre, 'Nombre comercial', validar: obligatorio),
-                campo(_direccion, 'Dirección'),
+                campo(_direccion, 'Dirección', lineas: 3, ayuda: 'Un renglón por línea del ticket: calle · barrio · código postal y localidad'),
                 campo(_telefono, 'Teléfono'),
                 const SizedBox(height: 8),
                 Text('Datos fiscales', style: titulo(20)),

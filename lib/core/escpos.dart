@@ -296,7 +296,9 @@ class EscPos {
   void abrirCajon() => _b.addAll([0x1B, 0x70, ...perfil.cajon.take(3)]);
 
   void cortar() {
-    saltos(4);
+    // El corte normal (GS V B) ya avanza el papel hasta la cuchilla: sin líneas de más no se
+    // desperdicia papel. El corte total (GS V 0) no avanza y las necesita para no cortar el QR.
+    if (perfil.corteTotal) saltos(4);
     _b.addAll(perfil.corteTotal ? [0x1D, 0x56, 0x00] : [0x1D, 0x56, 0x42, 0x00]);
   }
 }

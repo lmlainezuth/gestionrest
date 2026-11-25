@@ -349,6 +349,65 @@ class _FacturasPageState extends State<FacturasPage> {
     await _ejecutar(() => FacturacionService().facturaConNif(f, cliente), 'Factura con NIF emitida');
   }
 
+  /// Factura rechazada por Hacienda: se envían sus datos, corregidos, por el servicio Zuzendu.
+  Future<void> _subsanar(Map<String, dynamic> f) async {
+    final r = _respuesta(f['respuesta_envio'] as String?);
+    final motivo = [
+      if (r['descripcion'] != null) '${r['descripcion']}',
+      for (final a in (r['avisos'] as List?) ?? const []) '${a['codigo']}: ${a['descripcion']}',
+    ].join(' · ');
+    final conCliente = f['cliente_nif'] != null;
+    final razon = TextEditingController(text: f['razon_social_emisor'] as String?);
+    final nif = TextEditingController(text: f['cliente_nif'] as String?);
+    final nombre = TextEditingController(text: f['cliente_nombre'] as String?);
+    final direccion = TextEditingController(text: f['cliente_direccion'] as String?);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Subsanar ${f['serie']}-${f['numero']}'),
+        content: SizedBox(
+          width: 440,
+          child: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              if (motivo.isNotEmpty) Text('Hacienda la rechazó: $motivo', style: const TextStyle(color: Color(0xFFB3261E))),
+              const SizedBox(height: 8),
+              const Text(
+                  'Corrige el dato equivocado y envía. La factura y su fichero original no cambian: '
+                  'a Hacienda le llegan los datos corregidos (servicio Zuzendu). Si el fallo era del programa, '
+                  'basta con enviar tal cual desde la versión corregida.',
+                  style: TextStyle(color: C.gris, fontSize: 13)),
+              const SizedBox(height: 12),
+              TextField(controller: razon, decoration: const InputDecoration(labelText: 'Razón social del emisor')),
+              if (conCliente) ...[
+                const SizedBox(height: 10),
+                TextField(controller: nif, decoration: const InputDecoration(labelText: 'NIF del cliente')),
+                const SizedBox(height: 10),
+                TextField(controller: nombre, decoration: const InputDecoration(labelText: 'Nombre del cliente')),
+                const SizedBox(height: 10),
+                TextField(controller: direccion, decoration: const InputDecoration(labelText: 'Dirección del cliente')),
+              ],
+            ]),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Enviar subsanación')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await _ejecutar(
+      () => FacturacionService().subsanar(
+        f,
+        razonSocial: razon.text.trim(),
+        cliente: !conCliente
+            ? null
+            : {'documento': nif.text.trim().toUpperCase(), 'nombre': nombre.text.trim(), 'direccion': direccion.text.trim()},
+      ),
+      'Subsanación recibida por Hacienda',
+    );
+  }
+
   // ---------- Vista ----------
 
   static Map<String, dynamic> _respuesta(String? texto) {
@@ -495,6 +554,7 @@ class _FacturasPageState extends State<FacturasPage> {
         texto + (r['csv'] != null ? ' · CSV ${r['csv']}' : ''),
         if (f['estado_envio'] != 'enviada' && r['descripcion'] != null) '${r['descripcion']}',
         for (final a in avisos) '${a['codigo']}: ${a['descripcion']}',
+        if (r['subsanada'] == true) 'Subsanada (servicio Zuzendu)',
         if (f['_sustituida'] == true) 'Sustituida por una factura con NIF',
         if (f['_rectificada'] == true) 'Tiene devoluciones (rectificativa)',
         if (anul != null)
@@ -506,10 +566,25 @@ class _FacturasPageState extends State<FacturasPage> {
       isThreeLine: true,
       onTap: () => mostrarTicket(context, f, imprimirAuto: false),
       trailing: f['estado_envio'] == 'error' && !_trabajando
-          ? IconButton(
-              tooltip: 'Reintentar el envío (cuando se haya corregido la causa del rechazo)',
-              onPressed: () => _reenviarPendientes([f], const []),
-              icon: const Icon(Icons.refresh, color: Color(0xFFB3261E)),
+          ? PopupMenuButton<String>(
+              tooltip: 'Factura rechazada: qué hacer',
+              icon: const Icon(Icons.error_outline, color: Color(0xFFB3261E)),
+              onSelected: (v) => v == 'subsanar' ? _subsanar(f) : _reenviarPendientes([f], const []),
+              itemBuilder: (_) => [
+                const PopupMenuItem(
+                    value: 'reenviar',
+                    child: ListTile(
+                        leading: Icon(Icons.refresh),
+                        title: Text('Reintentar el envío'),
+                        subtitle: Text('Fallo del certificado o del servicio de Hacienda'))),
+                if (_admin)
+                  const PopupMenuItem(
+                      value: 'subsanar',
+                      child: ListTile(
+                          leading: Icon(Icons.build_outlined),
+                          title: Text('Subsanar (Zuzendu)'),
+                          subtitle: Text('Hacienda rechazó los datos del fichero'))),
+              ],
             )
           : !valida || _trabajando || !_admin
           ? null

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart' show debugPrint;
 import '../../core/software.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -294,6 +296,80 @@ class FacturacionService {
         .from('tbai_anulaciones')
         .update({'estado_envio': envio.estado, 'respuesta_envio': envio.respuesta})
         .eq('id', fila['id'])
+        .select()
+        .single();
+  }
+
+  /// Subsana en Hacienda una factura RECHAZADA (servicio Zuzendu-alta, OF 16/2022): envía sus
+  /// datos, corregidos si hace falta, con la huella del fichero original. La factura y su fichero
+  /// rechazado no cambian; el fichero de subsanación queda guardado en tbai_subsanaciones.
+  /// [razonSocial] y [cliente] (documento, nombre, direccion): solo si hay que corregirlos.
+  Future<Map<String, dynamic>> subsanar(Map<String, dynamic> factura, {String? razonSocial, Map<String, dynamic>? cliente}) async {
+    if (factura['estado_envio'] != 'error') throw StateError('Solo se subsana una factura que Hacienda ha rechazado');
+    final config = await _config();
+    final proveedor = proveedorPara(config['entorno'] as String);
+    if (proveedor is! ProveedorGipuzkoa) throw StateError('En modo simulado no hay nada que subsanar');
+    final lineas = (factura['lineas'] as List).map((m) => LineaFactura.fromMap(Map<String, dynamic>.from(m as Map))).toList();
+    // Rectificativa o factura que sustituye a un ticket: referencia a la factura original
+    final origen = factura['rectifica_id'] == null
+        ? null
+        : await supabase.from('facturas').select('serie, numero, fecha').eq('id', factura['rectifica_id'] as Object).single();
+    final corregido = TbaiXml.construir(
+      nifEmisor: factura['nif_emisor'] as String,
+      razonSocial: (razonSocial == null || razonSocial.isEmpty) ? factura['razon_social_emisor'] as String : razonSocial,
+      serie: factura['serie'] as String,
+      numero: factura['numero'] as int,
+      fecha: DateTime.parse(factura['fecha'] as String).toLocal(),
+      lineas: lineas,
+      desglose: Desglose.de(lineas),
+      anterior: null, // la huella va tal cual la del fichero original
+      licenciaTbai: (config['licencia_tbai'] as String?) ?? 'SIN-LICENCIA',
+      nifDesarrollador: (config['nif_desarrollador'] as String?) ?? Software.nifDesarrollador,
+      nombreSoftware: Software.nombre,
+      versionSoftware: Software.version,
+      cliente: factura['cliente_nif'] == null
+          ? null
+          : cliente ??
+              {'documento': factura['cliente_nif'], 'nombre': factura['cliente_nombre'], 'direccion': factura['cliente_direccion']},
+      sustituyeSimplificada: factura['sustituye_simplificada'] == true,
+      codigoRectificativa: factura['rectificativa_codigo'] as String?,
+      referencias: origen == null
+          ? const []
+          : [
+              (
+                serie: origen['serie'] as String,
+                numero: origen['numero'] as int,
+                fecha: DateTime.parse(origen['fecha'] as String).toLocal(),
+              ),
+            ],
+    );
+    final xml = TbaiXml.zuzenduAlta(
+      xmlCorregido: corregido,
+      xmlOriginal: factura['xml'] as String,
+      firmaOriginal: factura['firma'] as String,
+    );
+    final fila = await supabase
+        .from('tbai_subsanaciones')
+        .insert({'factura_id': factura['id'], 'accion': 'SUBSANAR', 'xml': xml, 'estado_envio': 'pendiente'})
+        .select()
+        .single();
+    final envio = await proveedor.enviarZuzendu(xml);
+    await supabase
+        .from('tbai_subsanaciones')
+        .update({'estado_envio': envio.estado, 'respuesta_envio': envio.respuesta})
+        .eq('id', fila['id'] as Object);
+    if (envio.estado == 'pendiente') {
+      final d = (jsonDecode(envio.respuesta) as Map)['descripcion'];
+      throw StateError('no se pudo enviar la subsanación${d == null ? '' : ' ($d)'}. Vuelve a intentarlo');
+    }
+    // La factura queda como recibida (subsanada) o sigue rechazada, con la respuesta nueva
+    final respuesta = envio.estado == 'enviada'
+        ? jsonEncode({...jsonDecode(envio.respuesta) as Map, 'subsanada': true})
+        : envio.respuesta;
+    return await supabase
+        .from('facturas')
+        .update({'estado_envio': envio.estado, 'respuesta_envio': respuesta})
+        .eq('id', factura['id'] as Object)
         .select()
         .single();
   }
