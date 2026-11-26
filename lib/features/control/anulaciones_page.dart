@@ -10,7 +10,7 @@ import 'control_comun.dart';
 
 const _dias = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 
-/// Quién anuló qué y cuándo, semana a semana. Lo apunta la base de datos (no se puede borrar).
+/// Quién anuló qué y cuándo, día a día. Lo apunta la base de datos (no se puede borrar).
 class AnulacionesPage extends StatefulWidget {
   const AnulacionesPage({super.key});
 
@@ -19,7 +19,7 @@ class AnulacionesPage extends StatefulWidget {
 }
 
 class _AnulacionesPageState extends State<AnulacionesPage> {
-  late DateTime _lunes = _inicioSemana(DateTime.now());
+  late DateTime _lunes = _inicioSemana(DateTime.now()); // el día que se está viendo (antes era el lunes de la semana)
   List<Map<String, dynamic>> _lista = [];
   List<Map<String, dynamic>> _anterior = [];
   Map<String, String> _nombres = {};
@@ -27,7 +27,7 @@ class _AnulacionesPageState extends State<AnulacionesPage> {
   bool _cargando = true;
   String? _errorCarga;
 
-  static DateTime _inicioSemana(DateTime d) => DateTime(d.year, d.month, d.day - (d.weekday - 1));
+  static DateTime _inicioSemana(DateTime d) => DateTime(d.year, d.month, d.day); // ahora: inicio del día
   DateTime _mas(int dias) => DateTime(_lunes.year, _lunes.month, _lunes.day + dias);
 
   @override
@@ -41,10 +41,10 @@ class _AnulacionesPageState extends State<AnulacionesPage> {
       await online(() async {
         final r = await Future.wait<dynamic>([
           supabase.from('registro_anulaciones').select()
-              .gte('momento', _lunes.toUtc().toIso8601String()).lt('momento', _mas(7).toUtc().toIso8601String())
+              .gte('momento', _lunes.toUtc().toIso8601String()).lt('momento', _mas(1).toUtc().toIso8601String())
               .order('momento', ascending: false),
           supabase.from('registro_anulaciones').select('importe')
-              .gte('momento', _mas(-7).toUtc().toIso8601String()).lt('momento', _lunes.toUtc().toIso8601String()),
+              .gte('momento', _mas(-1).toUtc().toIso8601String()).lt('momento', _lunes.toUtc().toIso8601String()),
           supabase.rpc('equipo_empresa'),
         ]);
         _lista = List<Map<String, dynamic>>.from(r[0] as List);
@@ -69,7 +69,7 @@ class _AnulacionesPageState extends State<AnulacionesPage> {
 
   void _semana(int d) {
     setState(() {
-      _lunes = _mas(7 * d);
+      _lunes = _mas(d);
       _persona = null;
       _cargando = true;
     });
@@ -103,11 +103,11 @@ class _AnulacionesPageState extends State<AnulacionesPage> {
       padding: EdgeInsets.all(ancho < 600 ? 14 : 28),
       children: [
         Row(children: [
-          IconButton(tooltip: 'Semana anterior', onPressed: () => _semana(-1), icon: const Icon(Icons.chevron_left)),
-          Text('${_lunes.day}/${_lunes.month} – ${_mas(6).day}/${_mas(6).month}', style: titulo(18)),
+          IconButton(tooltip: 'Día anterior', onPressed: () => _semana(-1), icon: const Icon(Icons.chevron_left)),
+          Text('${_dias[_lunes.weekday - 1]} ${_lunes.day}/${_lunes.month}', style: titulo(18)),
           IconButton(
-            tooltip: 'Semana siguiente',
-            onPressed: _mas(7).isAfter(DateTime.now()) ? null : () => _semana(1),
+            tooltip: 'Día siguiente',
+            onPressed: _mas(1).isAfter(DateTime.now()) ? null : () => _semana(1),
             icon: const Icon(Icons.chevron_right),
           ),
         ]),
@@ -118,7 +118,7 @@ class _AnulacionesPageState extends State<AnulacionesPage> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('${_lista.length} anulaciones · ${euros(total)}', style: titulo(24)),
             Text(
-              'Semana anterior: ${_anterior.length} · ${euros(totalAnt)}'
+              'Día anterior: ${_anterior.length} · ${euros(totalAnt)}'
               '${totalAnt > 0 && total > totalAnt * 1.5 ? '  ▲ suben mucho' : ''}',
               style: TextStyle(color: totalAnt > 0 && total > totalAnt * 1.5 ? rojo : C.gris),
             ),
@@ -141,7 +141,7 @@ class _AnulacionesPageState extends State<AnulacionesPage> {
         if (_cargando)
           const Padding(padding: EdgeInsets.all(30), child: Center(child: CircularProgressIndicator()))
         else if (visibles.isEmpty)
-          const Padding(padding: EdgeInsets.all(30), child: Center(child: Text('Ninguna anulación esta semana', style: TextStyle(color: C.gris))))
+          const Padding(padding: EdgeInsets.all(30), child: Center(child: Text('Ninguna anulación este día', style: TextStyle(color: C.gris))))
         else
           for (final d in porDia.entries) ...[
             Padding(padding: const EdgeInsets.fromLTRB(4, 12, 0, 6), child: Text(d.key, style: titulo(16))),

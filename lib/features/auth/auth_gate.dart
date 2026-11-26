@@ -35,7 +35,7 @@ class _AuthGateState extends State<AuthGate> {
   /// Secciones que se ven en el panel completo (no solo mesas y barra).
   static const _panel = [
     'carta', 'caja', 'facturas', 'informes', 'usuarios', 'ajustes',
-    'caja_diaria', 'gastos', 'proveedores', 'resumen',
+    'gastos', 'proveedores', 'resumen',
   ];
 
   Future<(Perfil?, List<Map<String, dynamic>>)> _preparar() async {

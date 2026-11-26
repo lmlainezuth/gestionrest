@@ -244,17 +244,40 @@ class FacturacionService {
   }
 
   /// Devolución o corrección: rectificativa por diferencias con las líneas devueltas en negativo.
-  Future<Map<String, dynamic>> rectificar(Map<String, dynamic> original, List<LineaFactura> devueltas) {
+  Future<Map<String, dynamic>> rectificar(Map<String, dynamic> original, List<LineaFactura> devueltas) async {
     final cliente = original['cliente_nif'] == null
         ? null
         : {'documento': original['cliente_nif'], 'nombre': original['cliente_nombre'], 'direccion': original['cliente_direccion']};
-    return emitir(
+    final r = await emitir(
       lineas: [for (final l in devueltas) LineaFactura(l.descripcion, -l.cantidad.abs(), l.precioUnitario)],
       cajaId: original['caja_id'] as String?,
       cliente: cliente,
       original: original,
       rectificativa: true,
     );
+    await _devolverCobro(original, 'DEV ${r['serie']}-${r['numero']}', importe: (r['importe_total'] as num).abs());
+    return r;
+  }
+
+  /// Aviso para la pantalla si la última anulación o devolución no se pudo descontar de la caja.
+  static String? avisoCaja;
+
+  /// El dinero devuelto sale de la caja: pago en negativo en el turno abierto (migración 0031).
+  /// No interrumpe la anulación ni la rectificativa si falla: deja el aviso en [avisoCaja].
+  Future<void> _devolverCobro(Map<String, dynamic> original, String referencia, {num? importe}) async {
+    avisoCaja = null;
+    try {
+      final r = Map<String, dynamic>.from(await supabase.rpc('devolver_cobro', params: {
+        'p_factura': original['id'],
+        'p_importe': importe,
+        'p_referencia': referencia,
+      }) as Map);
+      if (r['motivo'] == 'sin_turno') {
+        avisoCaja = 'No hay caja abierta: la devolución no se ha descontado de la caja';
+      }
+    } catch (e) {
+      avisoCaja = 'No se pudo descontar de la caja: $e';
+    }
   }
 
   /// El cliente pide factura con NIF de un ticket ya hecho: factura completa que lo sustituye.
@@ -295,12 +318,16 @@ class FacturacionService {
       'envio_intento': DateTime.now().toUtc().toIso8601String(),
     }, onConflict: 'factura_id').select().single();
     final envio = await proveedor.enviar(firma.xmlFirmado, baja: true);
-    return await supabase
+    final r = await supabase
         .from('tbai_anulaciones')
         .update({'estado_envio': envio.estado, 'respuesta_envio': envio.respuesta})
         .eq('id', fila['id'])
         .select()
         .single();
+    // Si Hacienda la rechaza, la factura sigue valiendo y el cobro no se toca
+    avisoCaja = null;
+    if (r['estado_envio'] != 'error') await _devolverCobro(factura, 'ANUL ${factura['serie']}-${factura['numero']}');
+    return r;
   }
 
   /// Subsana en Hacienda una factura RECHAZADA (servicio Zuzendu-alta, OF 16/2022): envía sus
@@ -397,11 +424,17 @@ class FacturacionService {
     if (mia != true) return anulacion;
     final config = await supabase.from('tbai_config').select('entorno').limit(1).single();
     final envio = await proveedorPara(config['entorno'] as String).enviar(anulacion['xml'] as String, baja: true);
-    return await supabase
+    final r = await supabase
         .from('tbai_anulaciones')
         .update({'estado_envio': envio.estado, 'respuesta_envio': envio.respuesta})
         .eq('id', anulacion['id'])
         .select()
         .single();
+    // Por si al anular no hubo conexión y el cobro quedó sin descontar (si ya estaba, no repite)
+    if (r['estado_envio'] != 'error') {
+      final f = await supabase.from('facturas').select('id, serie, numero').eq('id', anulacion['factura_id'] as Object).single();
+      await _devolverCobro(f, 'ANUL ${f['serie']}-${f['numero']}');
+    }
+    return r;
   }
 }

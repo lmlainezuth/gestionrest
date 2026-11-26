@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'core/teclado_app.dart';
 import 'core/conexion.dart';
 import 'core/config.dart';
 import 'core/software.dart';
@@ -48,7 +49,8 @@ class GestionRestApp extends StatelessWidget {
       localizationsDelegates: GlobalMaterialLocalizations.delegates,
       home: const AuthGate(),
       // Aviso TicketBAI (pendientes, rechazadas, modo no productivo) en todas las pantallas
-      builder: (context, child) => AvisoTbai(child: child ?? const SizedBox()),
+      // Encima de todo, el teclado en pantalla de la app (el TPV no tiene teclado)
+      builder: (context, child) => TecladoApp(child: AvisoTbai(child: child ?? const SizedBox())),
     );
   }
 }

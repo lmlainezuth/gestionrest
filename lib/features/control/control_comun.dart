@@ -8,6 +8,7 @@ const tiposAnulacion = <String, ({String texto, IconData icono})>{
   'venta_anulada': (texto: 'Venta cobrada anulada', icono: Icons.money_off),
   'factura_anulada': (texto: 'Factura anulada', icono: Icons.block),
   'devolucion': (texto: 'Devolución', icono: Icons.undo),
+  'quitado_antes_cobrar': (texto: 'Eliminado antes de cobrar (Barra)', icono: Icons.exposure_minus_1),
 };
 
 const estadosCocina = {

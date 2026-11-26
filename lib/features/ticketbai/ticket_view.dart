@@ -84,9 +84,13 @@ class TicketView extends StatelessWidget {
   }
 }
 
-/// Tras cobrar: sin pantalla que cerrar. Imprime (si toca) y deja un aviso breve con
-/// "Imprimir" por si el cliente lo pide. Las ventas del día se reimprimen en "Ventas de hoy".
+/// El último ticket cobrado en este equipo: se puede imprimir desde el recuadro «Última venta».
+Map<String, dynamic>? ultimoTicketCobrado;
+
+/// Tras cobrar: sin pantalla ni aviso que cerrar. Imprime (si toca) y abre el cajón. Si no se
+/// imprimió y el cliente lo pide, el ticket sale desde «Última venta» o desde «Ventas de hoy».
 Future<void> ticketCobrado(BuildContext context, Map<String, dynamic> factura) async {
+  ultimoTicketCobrado = factura;
   final imprimir = factura['tipo'] == 'completa' || await Impresion.imprimirVentas();
   // Ticket y cajón en un solo envío a la impresora (dos conexiones seguidas la WINTEC no siempre las acepta)
   if (imprimir) {
@@ -94,22 +98,6 @@ Future<void> ticketCobrado(BuildContext context, Map<String, dynamic> factura) a
   } else {
     Impresion.abrirCajon().catchError((_) {});
   }
-  if (!context.mounted) return;
-  final m = ScaffoldMessenger.of(context);
-  m.hideCurrentSnackBar();
-  // Con botón de acción, Flutter deja el aviso fijo: se cierra a mano a los 5 s
-  final aviso = m.showSnackBar(SnackBar(
-    duration: const Duration(seconds: 5),
-    content: Text('Cobrado ${factura['serie']}-${factura['numero']} · ${euros(factura['importe_total'] as num)}'),
-    action: imprimir
-        ? null
-        : SnackBarAction(label: 'IMPRIMIR', onPressed: () => Impresion.imprimirTicket(factura).ignore()),
-  ));
-  var cerrado = false;
-  aviso.closed.then((_) => cerrado = true);
-  Future.delayed(const Duration(seconds: 5), () {
-    if (!cerrado) aviso.close();
-  });
 }
 
 /// Botón del cobro: imprimir o no el ticket (ahorro de papel). Se recuerda en el equipo.

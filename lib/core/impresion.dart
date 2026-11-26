@@ -132,7 +132,9 @@ class Impresion {
           .eq('pedido_id', f['pedido_id'] as Object)
           .timeout(const Duration(seconds: 2));
       return [
-        for (final p in filas) {'metodo': p['metodo'], 'importe': p['importe'], 'entregado': p['pago_con']},
+        for (final p in filas)
+          if ((p['importe'] as num) > 0) // sin las devoluciones (pagos en negativo)
+            {'metodo': p['metodo'], 'importe': p['importe'], 'entregado': p['pago_con']},
       ];
     } catch (_) {
       return const [];

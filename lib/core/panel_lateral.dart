@@ -27,7 +27,11 @@ class PanelLateral extends StatelessWidget {
     this.onBoton,
     this.onBorrar,
     this.textoBorrar = 'Borrar',
+    this.anchura = 460,
   });
+
+  /// Ancho del panel en pantallas grandes. `double.infinity`: toda la pantalla (formularios en columnas).
+  final double anchura;
   final String encabezado;
   final Widget cuerpo;
   final String boton;
@@ -43,9 +47,12 @@ class PanelLateral extends StatelessWidget {
       child: Material(
         color: C.blanco,
         child: SizedBox(
-          width: ancho < 600 ? ancho : 460,
+          width: ancho < 600 || anchura > ancho ? ancho : anchura,
           height: double.infinity,
           child: SafeArea(
+            // Con el teclado en pantalla abierto, el panel se encoge: el botón de abajo queda a la vista
+            child: Padding(
+            padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
             child: Column(children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(24, 18, 12, 4),
@@ -77,6 +84,7 @@ class PanelLateral extends StatelessWidget {
                 ]),
               ),
             ]),
+            ),
           ),
         ),
       ),

@@ -8,6 +8,7 @@ import '../../core/tema.dart';
 import '../../main.dart';
 import '../gestion/comun.dart' show SelectorMes, rangoMes;
 import '../ticketbai/modelos.dart' show euros;
+import 'caja_page.dart' show imprimirCierreCaja;
 
 const _rojo = Color(0xFFB3261E);
 
@@ -148,6 +149,48 @@ class _CierresPageState extends State<CierresPage> {
     );
   }
 
+  /// Cierre completo en papel (ventas, esperado, contado y diferencia), como el que ve el encargado.
+  Future<void> _imprimir(Map<String, dynamic> t) async {
+    try {
+      final r = await Future.wait<dynamic>([
+        supabase.from('pagos').select('metodo, importe, pedido_id').eq('turno_id', t['id'] as Object),
+        supabase.from('movimientos_caja').select('tipo, importe').eq('turno_id', t['id'] as Object),
+        supabase.from('cajas').select('nombre').eq('id', t['caja_id'] as Object).maybeSingle(),
+      ]);
+      final ventas = <String, double>{};
+      for (final p in r[0] as List) {
+        ventas[p['metodo'] as String] = (ventas[p['metodo']] ?? 0) + (p['importe'] as num).toDouble();
+      }
+      double mov(String tipo) =>
+          (r[1] as List).where((m) => m['tipo'] == tipo).fold(0.0, (s, m) => s + (m['importe'] as num).toDouble());
+      await imprimirCierreCaja(
+        r: {
+          'esperado': _n(t['efectivo_calculado']),
+          'contado': _n(t['efectivo_real']),
+          'tarjeta_esperado': t['tarjeta_calculado'],
+          'tarjeta_contado': t['tarjeta_real'],
+        },
+        datos: {
+          'conteo': t['conteo'],
+          'efectivo': _n(t['efectivo_real']),
+          'tarjeta': t['tarjeta_real'],
+          'fondo': t['fondo_siguiente'],
+          'nota': t['nota'],
+        },
+        turno: t,
+        cajaNombre: ((r[2] as Map?)?['nombre'] as String?) ?? 'Caja',
+        ventas: ventas,
+        tickets: (r[0] as List).map((p) => p['pedido_id']).toSet().length,
+        ingresos: mov('ingreso'),
+        gastos: mov('gasto'),
+        cierra: _quien(t),
+        cerradoEn: DateTime.parse(t['cerrado_en'] as String).toLocal(),
+      );
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No se pudo imprimir: ${textoError(e)}')));
+    }
+  }
+
   void _detalle(Map<String, dynamic> t) {
     final conteo = (t['conteo'] as Map?)?.cast<String, dynamic>() ?? {};
     final piezas = conteo.entries.toList()..sort((a, b) => double.parse(b.key).compareTo(double.parse(a.key)));
@@ -163,6 +206,9 @@ class _CierresPageState extends State<CierresPage> {
             Text('Efectivo contado: ${euros(_n(t['efectivo_real']))}'),
             if (t['tarjeta_real'] != null)
               Text('Datáfono: esperado ${euros(_n(t['tarjeta_calculado']))} · contado ${euros(_n(t['tarjeta_real']))}'),
+            const SizedBox(height: 6),
+            Text(_n(t['diferencia']).abs() < 0.005 ? 'Cuadra' : '${_n(t['diferencia']) > 0 ? 'Sobran' : 'Faltan'} ${euros(_n(t['diferencia']).abs())}',
+                style: titulo(18, color: _n(t['diferencia']).abs() < 0.005 ? C.verde : (_n(t['diferencia']) < 0 ? _rojo : C.naranja))),
             const SizedBox(height: 10),
             if (piezas.isEmpty)
               const Text('Contó solo el total.', style: TextStyle(color: C.gris))
@@ -172,7 +218,10 @@ class _CierresPageState extends State<CierresPage> {
                     ' × ${e.value} = ${euros(double.parse(e.key) * (e.value as num))}'),
           ]),
         ),
-        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cerrar'))],
+        actions: [
+          TextButton.icon(onPressed: () => _imprimir(t), icon: const Icon(Icons.print), label: const Text('Imprimir')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cerrar')),
+        ],
       ),
     );
   }

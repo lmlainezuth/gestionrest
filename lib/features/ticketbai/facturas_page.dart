@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/pedir_cantidad.dart';
 import '../../core/red.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
@@ -260,7 +261,9 @@ class _FacturasPageState extends State<FacturasPage> {
     setState(() => _trabajando = true);
     try {
       final r = await accion();
-      _avisar(r['estado_envio'] == 'error' ? 'Hacienda lo ha rechazado: mira el detalle' : ok);
+      final caja = FacturacionService.avisoCaja;
+      FacturacionService.avisoCaja = null;
+      _avisar(r['estado_envio'] == 'error' ? 'Hacienda lo ha rechazado: mira el detalle' : caja == null ? ok : '$ok. $caja');
     } catch (e) {
       _avisar('No se pudo: $e');
     }
@@ -367,7 +370,23 @@ class _FacturasPageState extends State<FacturasPage> {
                     onPressed: cantidades[i] <= 0 ? null : () => setD(() => cantidades[i] -= 1),
                     icon: const Icon(Icons.remove_circle_outline),
                   ),
-                  SizedBox(width: 44, child: Text('${cantidades[i].toStringAsFixed(0)} / ${lineas[i].cantidad.toStringAsFixed(0)}')),
+                  // Tocar el número: marcar la cantidad de golpe (devolver 297 sin pulsar 297 veces)
+                  InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () async {
+                      final n = await pedirCantidad(ctx, titulo: '¿Cuántos devuelve? · ${lineas[i].descripcion}', permiteCero: true);
+                      if (n == null) return;
+                      setD(() => cantidades[i] = n > lineas[i].cantidad ? lineas[i].cantidad : n.toDouble());
+                    },
+                    child: Container(
+                      constraints: const BoxConstraints(minWidth: 84),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                      decoration: BoxDecoration(border: Border.all(color: C.bordeFuerte), borderRadius: BorderRadius.circular(8)),
+                      alignment: Alignment.center,
+                      child: Text('${cantidades[i].toStringAsFixed(0)} / ${lineas[i].cantidad.toStringAsFixed(0)}',
+                          maxLines: 1, style: const TextStyle(fontWeight: FontWeight.w600)),
+                    ),
+                  ),
                   IconButton(
                     onPressed: cantidades[i] >= lineas[i].cantidad ? null : () => setD(() => cantidades[i] += 1),
                     icon: const Icon(Icons.add_circle_outline),

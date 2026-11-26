@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/pedir_cantidad.dart';
 import '../../core/hora_equipo.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
@@ -70,10 +71,9 @@ Future<bool> abrirCajaRapida(BuildContext context) async {
             const SizedBox(height: 12),
             TextField(
               controller: ctrl,
-              autofocus: true,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              readOnly: true,
+              onTap: () => teclearEn(ctx, ctrl, titulo: 'Fondo de caja', decimal: true),
               decoration: const InputDecoration(labelText: 'Fondo de caja', suffixText: '€'),
-              onSubmitted: (v) => Navigator.pop(ctx, leerImporte(v.isEmpty ? '0' : v)),
             ),
           ],
         ),

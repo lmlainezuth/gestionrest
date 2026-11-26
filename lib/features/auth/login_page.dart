@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/logo.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
 import '../../core/empresa_dispositivo.dart';
@@ -436,13 +437,7 @@ class _Marca extends StatelessWidget {
         child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(color: C.naranja, borderRadius: BorderRadius.circular(12)),
-            alignment: Alignment.center,
-            child: Text('GR', style: titulo(18)),
-          ),
+          const LogoGestionRest(tam: 44),
           const SizedBox(width: 12),
           Text('GestiónRest', style: titulo(24, color: oscura ? Colors.white : C.tinta)),
         ],

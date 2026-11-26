@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
+import '../../core/pedir_cantidad.dart';
 import '../../core/conexion.dart';
 import '../../core/red.dart';
 import '../../core/tema.dart';
@@ -18,6 +19,7 @@ import '../ticketbai/ticket_view.dart';
 import '../ticketbai/ventas_hoy.dart';
 import '../ticketbai/tbai_proveedor.dart' show precalentarFirma;
 import '../ticketbai/envios_pendientes.dart';
+import 'quitados.dart';
 import 'venta_offline.dart';
 
 class _Linea {
@@ -55,14 +57,34 @@ class _BarraPageState extends State<BarraPage> {
   String? _grupoId;
 
   List<Map<String, dynamic>> _cuentas = [];
-  Map<String, dynamic>? _cuenta; // cuenta abierta seleccionada
-  final List<_Linea> _ronda = [];
+  // La venta a medias de Barra (lo marcado y la cuenta elegida) se guarda fuera de la pantalla:
+  // así no se pierde al ir a otra sección y volver. En modo mesa cada mesa lleva la suya.
+  static final List<_Linea> _rondaBarra = [];
+  static Map<String, dynamic>? _cuentaBarra;
+  static String? _empresaBarra;
+  Map<String, dynamic>? _cuentaMesa;
+  Map<String, dynamic>? get _cuenta => widget.mesa == null ? _cuentaBarra : _cuentaMesa; // cuenta abierta seleccionada
+  set _cuenta(Map<String, dynamic>? v) {
+    if (widget.mesa == null) {
+      _cuentaBarra = v;
+    } else {
+      _cuentaMesa = v;
+    }
+  }
+  late final List<_Linea> _ronda = widget.mesa == null ? _rondaBarra : [];
   bool _cajaAbierta = true; // se comprueba al cargar (con internet)
 
   @override
   void initState() {
     super.initState();
+    // Otro bar: lo que quedó a medias era del anterior
+    if (_empresaBarra != Perfil.cache?.empresaId) {
+      _rondaBarra.clear();
+      _cuentaBarra = null;
+      _empresaBarra = Perfil.cache?.empresaId;
+    }
     Conexion.enLinea.addListener(_alCambiarConexion);
+    Quitados.subir(); // por si quedó algo apuntado sin internet
     precalentarFirma();
     _cargar();
   }
@@ -172,16 +194,42 @@ class _BarraPageState extends State<BarraPage> {
     }
   }
 
-  Future<void> _anadir(Map<String, dynamic> p) async {
+  /// Mantener pulsado un producto: se marca la cantidad y se añade de golpe.
+  Future<void> _anadirVarios(Map<String, dynamic> p) async {
+    final n = await pedirCantidad(context, titulo: '¿Cuántos? · ${p['nombre']}');
+    if (n != null && mounted) await _anadir(p, cantidad: n.toDouble());
+  }
+
+  /// Tocar el número de una línea: se escribe la cantidad (0 la quita).
+  Future<void> _fijarCantidad(_Linea l) async {
+    final n = await pedirCantidad(context, titulo: l.nombre, permiteCero: true);
+    if (n == null || !mounted) return;
+    if (n < l.cantidad) _apuntarQuitado(l, l.cantidad - n);
+    setState(() {
+      if (n == 0) {
+        _ronda.remove(l);
+      } else {
+        l.cantidad = n.toDouble();
+      }
+    });
+  }
+
+  /// Control del dueño: lo que se quita de una venta de Barra antes de cobrar queda apuntado.
+  void _apuntarQuitado(_Linea l, double cantidad) {
+    if (_modoMesa) return; // en mesas ya se registra al anular lo enviado a cocina
+    Quitados.apuntar(l.nombre, cantidad, cantidad * l.precio);
+  }
+
+  Future<void> _anadir(Map<String, dynamic> p, {double cantidad = 1}) async {
     final mods = await elegirModificadores(context, p);
     if (mods == null || !mounted) return;
     final clave = claveModificadores(mods);
     setState(() {
       final l = _ronda.where((l) => l.producto['id'] == p['id'] && claveModificadores(l.mods) == clave).firstOrNull;
       if (l != null) {
-        l.cantidad++;
+        l.cantidad += cantidad;
       } else {
-        _ronda.add(_Linea(p, mods));
+        _ronda.add(_Linea(p, mods)..cantidad = cantidad);
       }
     });
   }
@@ -190,7 +238,19 @@ class _BarraPageState extends State<BarraPage> {
   double get _totalCuenta => (_cuenta?['total'] as num?)?.toDouble() ?? 0;
 
   /// Crea el pedido si hace falta y le añade la ronda. Devuelve su id.
-  Future<String> _guardarRonda({String? nombre}) async {
+  /// Papel para cocina con lo marcado ahora (si hay algo de cocina).
+  void _comandaCocina(String titulo) => Impresion.imprimirComanda(
+        'Cocina',
+        titulo,
+        [
+          for (final l in _ronda)
+            if (_areas[l.producto['area_id']] == 'Cocina')
+              {'cantidad': l.cantidad.toStringAsFixed(0), 'descripcion': l.nombre, 'curso': 'ya'},
+        ],
+      ).ignore();
+
+  /// [comanda] false: no imprime aún la comanda de cocina (se imprime al confirmar el cobro).
+  Future<String> _guardarRonda({String? nombre, bool comanda = true}) async {
     var id = _cuenta?['id'] as String?;
     if (id == null) {
       final p = await supabase
@@ -219,15 +279,7 @@ class _BarraPageState extends State<BarraPage> {
             'curso': 'ya',
           },
       ]);
-      Impresion.imprimirComanda(
-        'Cocina',
-        _cuenta?['nombre_llevar'] as String? ?? nombre ?? 'Barra',
-        [
-          for (final l in _ronda)
-            if (_areas[l.producto['area_id']] == 'Cocina')
-              {'cantidad': l.cantidad.toStringAsFixed(0), 'descripcion': l.nombre, 'curso': 'ya'},
-        ],
-      ).ignore();
+      if (comanda) _comandaCocina(_cuenta?['nombre_llevar'] as String? ?? nombre ?? 'Barra');
     }
     return id;
   }
@@ -240,7 +292,8 @@ class _BarraPageState extends State<BarraPage> {
     try {
       final String id;
       try {
-        id = await _guardarRonda();
+        // Venta rápida nueva: la comanda de cocina sale al cobrar, no antes (por si se cancela)
+        id = await _guardarRonda(comanda: !eraNueva);
       } catch (e) {
         // Se ha caído internet: venta rápida firmada en el equipo
         if (esErrorDeRed(e)) {
@@ -264,13 +317,18 @@ class _BarraPageState extends State<BarraPage> {
         builder: (_) => CobroDialog(pedido: pedido, mesaId: null),
       );
       if (factura == null) {
-        // Cobro cancelado: una venta rápida sin nombre no se queda abierta
-        if (eraNueva) await supabase.from('pedidos').update({'estado': 'anulado'}).eq('id', id);
-      } else if (mounted) {
-        await ticketCobrado(context, factura);
+        if (eraNueva) {
+          // Cobro cancelado: el pedido a medias se anula, pero lo marcado sigue en pantalla
+          await supabase.from('pedidos').update({'estado': 'anulado'}).eq('id', id);
+        } else {
+          _ronda.clear(); // ya quedó apuntado en la cuenta, que sigue abierta y elegida
+        }
+      } else {
+        if (eraNueva) _comandaCocina('Barra');
+        if (mounted) await ticketCobrado(context, factura);
+        _ronda.clear();
+        _cuenta = null;
       }
-      _ronda.clear();
-      _cuenta = null;
       await _cargarCuentas();
       await _comprobarCaja(); // por si se abrió desde el cobro
     } catch (e) {
@@ -314,6 +372,9 @@ class _BarraPageState extends State<BarraPage> {
       _cuenta = null;
       await _cargarCuentas();
       EnviosPendientes.revisar(); // actualiza el aviso de ventas guardadas
+      UltimaVenta.guardar(total, [
+        {'metodo': pago.metodo, 'importe': total, 'entregado': pago.metodo == 'efectivo' ? pago.entregado : null},
+      ]);
       if (mounted) {
         await ticketCobrado(context, {
           ...factura,
@@ -461,12 +522,13 @@ class _BarraPageState extends State<BarraPage> {
     return ancho
         ? Row(
             children: [
-              Expanded(child: _carta()),
+              // La venta (cuentas, líneas, total y cobrar) a la izquierda; los productos a la derecha
               Container(
                 width: 420,
-                decoration: const BoxDecoration(color: C.blanco, border: Border(left: BorderSide(color: C.borde))),
+                decoration: const BoxDecoration(color: C.blanco, border: Border(right: BorderSide(color: C.borde))),
                 child: panel,
               ),
+              Expanded(child: _carta()),
             ],
           )
         : Column(
@@ -522,6 +584,7 @@ class _BarraPageState extends State<BarraPage> {
                   producto: p,
                   cantidad: _ronda.where((l) => l.producto['id'] == p['id']).fold(0.0, (s, l) => s + l.cantidad),
                   onTap: () => _anadir(p),
+                  onLongPress: () => _anadirVarios(p),
                 ),
             ],
           ),
@@ -654,10 +717,22 @@ class _BarraPageState extends State<BarraPage> {
                     children: [
                       IconButton(
                         tooltip: 'Uno menos',
-                        onPressed: () => setState(() => l.cantidad > 1 ? l.cantidad-- : _ronda.remove(l)),
+                        onPressed: () {
+                          _apuntarQuitado(l, 1);
+                          setState(() => l.cantidad > 1 ? l.cantidad-- : _ronda.remove(l));
+                        },
                         icon: const Icon(Icons.remove_circle_outline),
                       ),
-                      Text(l.cantidad.toStringAsFixed(0), style: titulo(18)),
+                      InkWell(
+                        borderRadius: BorderRadius.circular(8),
+                        onTap: () => _fijarCantidad(l),
+                        child: Container(
+                          constraints: const BoxConstraints(minWidth: 40),
+                          height: 40,
+                          alignment: Alignment.center,
+                          child: Text(l.cantidad.toStringAsFixed(0), style: titulo(18)),
+                        ),
+                      ),
                       IconButton(
                         tooltip: 'Uno más',
                         onPressed: () => setState(() => l.cantidad++),
@@ -670,6 +745,58 @@ class _BarraPageState extends State<BarraPage> {
                 ),
             ],
           ),
+        ),
+        // Última venta, bien a la vista (por si reclaman el cambio)
+        ValueListenableBuilder(
+          valueListenable: UltimaVenta.dato,
+          builder: (_, u, _) {
+            if (u == null) return const SizedBox.shrink();
+            Widget cifra(String que, double v, {bool fuerte = false}) => Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(que, style: const TextStyle(color: C.tinta, fontSize: 14, fontWeight: FontWeight.w600)),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(euros(v), style: titulo(fuerte ? 28 : 22, color: fuerte ? C.verde : C.tinta)),
+                    ),
+                  ]),
+                );
+            return Container(
+              margin: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+              padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFE3F1EC),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: C.verde, width: 1.5),
+              ),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  const Icon(Icons.history, size: 20, color: C.verde),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text('ÚLTIMA VENTA · ${u.hora} · ${u.metodo}',
+                        style: const TextStyle(color: C.verde, fontWeight: FontWeight.w800, fontSize: 14)),
+                  ),
+                  // Por si no se imprimió y el cliente pide el ticket
+                  if (ultimoTicketCobrado != null)
+                    TextButton.icon(
+                      onPressed: () => Impresion.imprimirTicket(ultimoTicketCobrado!).catchError((e) {
+                        if (mounted) _avisar('No se pudo imprimir: $e');
+                      }),
+                      style: TextButton.styleFrom(visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 8)),
+                      icon: const Icon(Icons.print_outlined, size: 18),
+                      label: const Text('Ticket'),
+                    ),
+                ]),
+                const SizedBox(height: 6),
+                Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                  cifra('Total', u.total),
+                  if (u.entregado != null) cifra('Entregó', u.entregado!),
+                  if (u.cambio != null) cifra('Cambio', u.cambio!, fuerte: true),
+                ]),
+              ]),
+            );
+          },
         ),
         Container(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),

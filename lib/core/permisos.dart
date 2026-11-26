@@ -4,12 +4,12 @@ import '../features/auth/perfil.dart';
 const permisosPermitidos = <Rol, List<String>>{
   Rol.admin: [
     'mesas', 'barra', 'carta', 'caja', 'facturas', 'informes', 'usuarios', 'cocina', 'ajustes', 'cobrar', 'anular',
-    'caja_diaria', 'gastos', 'proveedores', 'resumen', 'stock', 'fichajes', 'cierres', 'panel', 'anulaciones',
+    'gastos', 'proveedores', 'resumen', 'stock', 'fichajes', 'cierres', 'panel', 'anulaciones',
     'total_dia',
   ],
   // facturas (solo ver), informes y cierres: para el perfil de Gestión (oficina / gestor)
   Rol.camarero: [
-    'mesas', 'barra', 'cobrar', 'anular', 'caja', 'caja_diaria', 'gastos', 'proveedores', 'resumen', 'stock',
+    'mesas', 'barra', 'cobrar', 'anular', 'caja', 'gastos', 'proveedores', 'resumen', 'stock',
     'total_dia', 'facturas', 'informes', 'cierres',
   ],
   Rol.cocinero: ['cocina'],
@@ -19,7 +19,7 @@ const permisosPermitidos = <Rol, List<String>>{
 const permisosPorDefecto = <Rol, List<String>>{
   Rol.admin: [
     'mesas', 'barra', 'carta', 'caja', 'facturas', 'informes', 'usuarios', 'cocina', 'ajustes', 'cobrar', 'anular',
-    'caja_diaria', 'gastos', 'proveedores', 'resumen', 'stock', 'fichajes', 'cierres', 'panel', 'anulaciones',
+    'gastos', 'proveedores', 'resumen', 'stock', 'fichajes', 'cierres', 'panel', 'anulaciones',
     'total_dia',
   ],
   Rol.camarero: ['mesas', 'barra', 'cobrar', 'anular'],
@@ -28,7 +28,7 @@ const permisosPorDefecto = <Rol, List<String>>{
 
 /// Secciones de gestión (lo que antes hacía Yitso).
 const permisosGestion = [
-  'caja_diaria', 'gastos', 'proveedores', 'resumen', 'stock', // compras y caja diaria
+  'gastos', 'proveedores', 'resumen', 'stock', // compras
   'facturas', 'informes', 'cierres', // facturas emitidas (ver), ventas, márgenes, IVA trimestral, descuadres
 ];
 
@@ -44,7 +44,6 @@ const nombresPermiso = <String, String>{
   'ajustes': 'Ajustes',
   'cobrar': 'Cobrar',
   'anular': 'Anular productos enviados',
-  'caja_diaria': 'Gestión · Caja diaria',
   'gastos': 'Gestión · Gastos',
   'proveedores': 'Gestión · Proveedores',
   'resumen': 'Gestión · Resumen del mes',

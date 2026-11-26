@@ -31,7 +31,8 @@ class _CajaPageState extends State<CajaPage> {
   List<Map<String, dynamic>> _movimientos = [];
   List<Map<String, dynamic>> _conceptos = [];
   int _tickets = 0;
-  int _mesasAbiertas = 0;
+  int _mesasAbiertas = 0; // todo lo que queda sin cobrar: mesas + cuentas de barra con nombre
+  String? _sinCobrarDetalle;
 
   @override
   void initState() {
@@ -58,8 +59,20 @@ class _CajaPageState extends State<CajaPage> {
             .select('*, conceptos_gasto(nombre)')
             .eq('turno_id', _turno!['id'])
             .order('creado_en', ascending: false));
-        final abiertos = await supabase.from('pedidos').select('id').inFilter('estado', ['abierto', 'precuenta']);
-        _mesasAbiertas = abiertos.length;
+        final abiertos =
+            await supabase.from('pedidos').select('id, tipo, nombre_llevar').inFilter('estado', ['abierto', 'precuenta']);
+        // Una venta rápida de barra sin nombre no es una cuenta: es un cobro que se quedó a medias
+        final mesas = abiertos.where((p) => p['tipo'] == 'mesa').length;
+        final barra = abiertos.where((p) => p['tipo'] == 'barra' && p['nombre_llevar'] != null).length;
+        final llevar = abiertos.where((p) => p['tipo'] == 'llevar').length;
+        _mesasAbiertas = mesas + barra + llevar;
+        _sinCobrarDetalle = _mesasAbiertas == 0
+            ? null
+            : [
+                if (mesas > 0) '$mesas de mesas',
+                if (barra > 0) '$barra de barra',
+                if (llevar > 0) '$llevar para llevar',
+              ].join(' · ');
       }
       _error = null;
     } catch (e) {
@@ -136,7 +149,7 @@ class _CajaPageState extends State<CajaPage> {
   /// Cuadre ciego: se cuenta sin ver lo esperado; el servidor calcula y guarda la diferencia.
   Future<void> _cerrar() async {
     final datos = await contarCajaCiega(context,
-        aviso: _mesasAbiertas > 0 ? 'Atención: hay $_mesasAbiertas mesas sin cobrar' : null,
+        aviso: _mesasAbiertas > 0 ? 'Atención: hay $_mesasAbiertas cuentas sin cobrar ($_sinCobrarDetalle)' : null,
         fondo: (_turno!['efectivo_inicial'] as num).toDouble());
     if (datos == null) return;
     // Datos del turno antes de cerrarlo (al recargar desaparecen)
@@ -157,133 +170,26 @@ class _CajaPageState extends State<CajaPage> {
       }) as Map);
     });
     if (!mounted || r == null) return;
-    void imprimir() => _imprimirCierre(
+    void imprimir() => imprimirCierreCaja(
           r: r!, datos: datos, turno: turno, cajaNombre: cajaNombre,
           ventas: ventas, tickets: tickets, ingresos: ingresos, gastos: gastos,
         ).catchError((e) {
           if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No se pudo imprimir: $e')));
         });
     imprimir();
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Caja cerrada'),
-        content: r!['esperado'] == null
-            ? const Text('Recuento guardado. El encargado verá el resultado.')
-            : Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-                _lineaCuadre('Efectivo', r!['esperado'] as num, r!['contado'] as num),
-                if (r!['tarjeta_contado'] != null) ...[
-                  const SizedBox(height: 12),
-                  _lineaCuadre('Datáfono', r!['tarjeta_esperado'] as num, r!['tarjeta_contado'] as num),
-                ],
-              ]),
-        actions: [
-          TextButton.icon(onPressed: imprimir, icon: const Icon(Icons.print), label: const Text('Reimprimir')),
-          FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Aceptar')),
-        ],
-      ),
-    );
-  }
-
-  /// Ticket de cierre: recuento siempre; ventas, esperado y diferencia solo si el servidor
-  /// los devuelve (encargado). Al camarero no se le imprime lo esperado (cuadre ciego).
-  Future<void> _imprimirCierre({
-    required Map<String, dynamic> r,
-    required Map<String, dynamic> datos,
-    required Map<String, dynamic> turno,
-    required String cajaNombre,
-    required Map<String, double> ventas,
-    required int tickets,
-    required double ingresos,
-    required double gastos,
-  }) async {
-    String f(DateTime d) {
-      String two(int n) => n.toString().padLeft(2, '0');
-      return '${two(d.day)}/${two(d.month)}/${d.year} ${two(d.hour)}:${two(d.minute)}';
-    }
-
-    String etiqueta(double v) => v >= 1 ? '${v.toStringAsFixed(0)} EUR' : '${(v * 100).round()} cts';
-    final l = <(String, String?)>[];
-    final conteo = (datos['conteo'] as Map?)?.map((k, v) => MapEntry(double.parse('$k'), (v as num).toInt()));
-    if (conteo != null && conteo.isNotEmpty) {
-      final monedas = conteo.keys.where((v) => v < 5).toList()..sort((a, b) => b.compareTo(a));
-      final billetes = conteo.keys.where((v) => v >= 5).toList()..sort((a, b) => b.compareTo(a));
-      if (monedas.isNotEmpty) {
-        l.add(('MONEDAS', null));
-        for (final v in monedas) {
-          l.add(('${conteo[v]} x ${etiqueta(v)}', euros(conteo[v]! * v)));
-        }
-      }
-      if (billetes.isNotEmpty) {
-        l.add(('BILLETES', null));
-        for (final v in billetes) {
-          l.add(('${conteo[v]} x ${etiqueta(v)}', euros(conteo[v]! * v)));
-        }
-      }
-      l.add(('-', ''));
-    }
-    l.add(('!Efectivo contado', euros(datos['efectivo'] as num)));
-    if (datos['tarjeta'] != null) l.add(('Datáfono (cierre banco)', euros(datos['tarjeta'] as num)));
-    final fondo = (datos['fondo'] as num?) ?? 0;
-    l
-      ..add(('Fondo que queda en cajón', euros(fondo)))
-      ..add(('!RETIRAR', euros(((datos['efectivo'] as num) - fondo).clamp(0, double.infinity))));
-
-    if (r['esperado'] != null) {
-      final total = ventas.values.fold(0.0, (s, v) => s + v);
-      l
-        ..add(('-', ''))
-        ..add(('VENTAS ($tickets tickets)', null))
-        ..add(('Efectivo', euros(ventas['efectivo'] ?? 0)))
-        ..add(('Tarjeta', euros(ventas['tarjeta'] ?? 0)));
-      if ((ventas['bizum'] ?? 0) > 0) l.add(('Bizum', euros(ventas['bizum']!)));
-      l
-        ..add(('!Total ventas', euros(total)))
-        ..add(('-', ''))
-        ..add(('EFECTIVO', null))
-        ..add(('Fondo inicial', euros(turno['efectivo_inicial'] as num)))
-        ..add(('+ Ventas en efectivo', euros(ventas['efectivo'] ?? 0)));
-      if (ingresos > 0) l.add(('+ Ingresos', euros(ingresos)));
-      if (gastos > 0) l.add(('- Gastos / pagos', euros(gastos)));
-      final dif = (r['contado'] as num) - (r['esperado'] as num);
-      l
-        ..add(('Esperado', euros(r['esperado'] as num)))
-        ..add(('Contado', euros(r['contado'] as num)))
-        ..add((dif.abs() < 0.005 ? '!CUADRA' : (dif > 0 ? '!SOBRAN' : '!FALTAN'), euros(dif.abs())));
-      if (r['tarjeta_contado'] != null && r['tarjeta_esperado'] != null) {
-        final dt = (r['tarjeta_contado'] as num) - (r['tarjeta_esperado'] as num);
-        l
-          ..add(('-', ''))
-          ..add(('DATÁFONO', null))
-          ..add(('Esperado', euros(r['tarjeta_esperado'] as num)))
-          ..add(('Contado', euros(r['tarjeta_contado'] as num)))
-          ..add((dt.abs() < 0.005 ? '!CUADRA' : (dt > 0 ? '!SOBRAN' : '!FALTAN'), euros(dt.abs())));
-      }
-    } else {
-      l..add(('-', ''))..add(('El resultado lo revisa el encargado', ''));
-    }
-    final nota = (datos['nota'] as String?) ?? '';
-    if (nota.isNotEmpty) l..add(('-', ''))..add(('NOTA', null))..add((nota, ''));
-    l..add(('-', ''))..add(('Firma:', ''))..add(('', ''))..add(('', ''));
-
-    await Impresion.imprimirInforme('CIERRE DE CAJA', [
-      cajaNombre,
-      'Apertura ${f(DateTime.parse(turno['abierto_en'] as String).toLocal())}',
-      'Cierre   ${f(DateTime.now())}',
-      'Cierra: ${Perfil.cache?.nombre ?? ''}',
-    ], l);
-  }
-
-  static Widget _lineaCuadre(String que, num esperado, num contado) {
-    final dif = contado - esperado;
-    final cuadra = dif.abs() < 0.005;
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text('$que: esperado ${euros(esperado)} · contado ${euros(contado)}'),
-      Text(
-        cuadra ? 'Cuadra al céntimo' : '${dif > 0 ? 'Sobran' : 'Faltan'} ${euros(dif.abs())}',
-        style: titulo(20, color: cuadra ? C.verde : const Color(0xFFB3261E)),
-      ),
-    ]);
+    // Sin ventana con el resultado: sale el papel y ya. Queda un aviso con «Reimprimir» por si
+    // la impresora falló (el encargado también puede reimprimirlo desde Cierres y descuadres).
+    final aviso = ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      duration: const Duration(seconds: 10),
+      content: const Text('Caja cerrada. Se ha impreso el cierre.'),
+      action: SnackBarAction(label: 'Reimprimir', onPressed: imprimir),
+    ));
+    // Un aviso con botón no se quita solo en las versiones nuevas de Flutter: se cierra a mano
+    var cerrado = false;
+    aviso.closed.then((_) => cerrado = true);
+    Future.delayed(const Duration(seconds: 10), () {
+      if (!cerrado) aviso.close();
+    });
   }
 
   Future<void> _accion(Future<dynamic> Function() f) async {
@@ -364,8 +270,8 @@ class _CajaPageState extends State<CajaPage> {
           children: !(Perfil.cache?.esAdmin ?? false)
               ? [
                   // Cuadre ciego: el camarero no ve importes del turno
-                  _Cifra('Tickets del turno', '$_tickets', 'El cuadre se hace a ciegas al cerrar'),
-                  _Cifra('Mesas sin cobrar', '$_mesasAbiertas', null),
+                  _Cifra('Tickets del turno', '$_tickets', 'Se cuenta a ciegas; el resultado sale en el cierre'),
+                  _Cifra('Cuentas sin cobrar', '$_mesasAbiertas', _sinCobrarDetalle),
                 ]
               : [
             _Cifra('Ventas del turno', euros(_totalVentas), '$_tickets tickets', destacada: true),
@@ -374,7 +280,7 @@ class _CajaPageState extends State<CajaPage> {
             _Cifra('Bizum', euros(_ventas['bizum'] ?? 0), null),
             _Cifra('Efectivo esperado en cajón', euros(_efectivoEsperado),
                 'Fondo + efectivo + ingresos − gastos'),
-            _Cifra('Mesas sin cobrar', '$_mesasAbiertas', null),
+            _Cifra('Cuentas sin cobrar', '$_mesasAbiertas', _sinCobrarDetalle),
           ],
         ),
         const SizedBox(height: 28),
@@ -430,4 +336,152 @@ class _Cifra extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Ticket de cierre, uno solo e igual para todos (también se reimprime desde Cierres y descuadres):
+/// recuento, ventas, esperado, diferencia y lo quitado antes de cobrar. Se cuenta a ciegas, pero el
+/// resultado se imprime porque el recuento ya está guardado y no se puede cambiar (migración 0034).
+/// Con un servidor sin la 0034, al camarero le sale solo el recuento.
+Future<void> imprimirCierreCaja({
+  required Map<String, dynamic> r,
+  required Map<String, dynamic> datos,
+  required Map<String, dynamic> turno,
+  required String cajaNombre,
+  required Map<String, double> ventas,
+  required int tickets,
+  required double ingresos,
+  required double gastos,
+  String? cierra, // quién cerró y cuándo: al reimprimir un cierre antiguo desde Cierres
+  DateTime? cerradoEn,
+}) async {
+  String f(DateTime d) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${two(d.day)}/${two(d.month)}/${d.year} ${two(d.hour)}:${two(d.minute)}';
+  }
+
+  String etiqueta(double v) => v >= 1 ? '${v.toStringAsFixed(0)} EUR' : '${(v * 100).round()} cts';
+  final l = <(String, String?)>[];
+  final conteo = (datos['conteo'] as Map?)?.map((k, v) => MapEntry(double.parse('$k'), (v as num).toInt()));
+  if (conteo != null && conteo.isNotEmpty) {
+    final monedas = conteo.keys.where((v) => v < 5).toList()..sort((a, b) => b.compareTo(a));
+    final billetes = conteo.keys.where((v) => v >= 5).toList()..sort((a, b) => b.compareTo(a));
+    if (monedas.isNotEmpty) {
+      l.add(('MONEDAS', null));
+      for (final v in monedas) {
+        l.add(('${conteo[v]} x ${etiqueta(v)}', euros(conteo[v]! * v)));
+      }
+    }
+    if (billetes.isNotEmpty) {
+      l.add(('BILLETES', null));
+      for (final v in billetes) {
+        l.add(('${conteo[v]} x ${etiqueta(v)}', euros(conteo[v]! * v)));
+      }
+    }
+    l.add(('-', ''));
+  }
+  l.add(('!Efectivo contado', euros(datos['efectivo'] as num)));
+  if (datos['tarjeta'] != null) l.add(('Datáfono (cierre banco)', euros(datos['tarjeta'] as num)));
+  final fondo = (datos['fondo'] as num?) ?? 0;
+  l
+    ..add(('Fondo que queda en cajón', euros(fondo)))
+    ..add(('!RETIRAR', euros(((datos['efectivo'] as num) - fondo).clamp(0, double.infinity))));
+
+  if (r['esperado'] != null) {
+    final total = ventas.values.fold(0.0, (s, v) => s + v);
+    l
+      ..add(('-', ''))
+      ..add(('VENTAS ($tickets tickets)', null))
+      ..add(('Efectivo', euros(ventas['efectivo'] ?? 0)))
+      ..add(('Tarjeta', euros(ventas['tarjeta'] ?? 0)));
+    if ((ventas['bizum'] ?? 0) > 0) l.add(('Bizum', euros(ventas['bizum']!)));
+    l
+      ..add(('!Total ventas', euros(total)))
+      ..add(('-', ''))
+      ..add(('EFECTIVO', null))
+      ..add(('Fondo inicial', euros(turno['efectivo_inicial'] as num)))
+      ..add(('+ Ventas en efectivo', euros(ventas['efectivo'] ?? 0)));
+    final ing = (r['ingresos'] as num?)?.toDouble() ?? ingresos;
+    final gas = (r['gastos'] as num?)?.toDouble() ?? gastos;
+    if (ing > 0) l.add(('+ Ingresos', euros(ing)));
+    if (gas > 0) l.add(('- Gastos / pagos', euros(gas)));
+    final dif = (r['contado'] as num) - (r['esperado'] as num);
+    l
+      ..add(('Esperado', euros(r['esperado'] as num)))
+      ..add(('Contado', euros(r['contado'] as num)))
+      ..add((dif.abs() < 0.005 ? '!CUADRA' : (dif > 0 ? '!SOBRAN' : '!FALTAN'), euros(dif.abs())));
+    if (r['tarjeta_contado'] != null && r['tarjeta_esperado'] != null) {
+      final dt = (r['tarjeta_contado'] as num) - (r['tarjeta_esperado'] as num);
+      l
+        ..add(('-', ''))
+        ..add(('DATÁFONO', null))
+        ..add(('Esperado', euros(r['tarjeta_esperado'] as num)))
+        ..add(('Contado', euros(r['tarjeta_contado'] as num)))
+        ..add((dt.abs() < 0.005 ? '!CUADRA' : (dt > 0 ? '!SOBRAN' : '!FALTAN'), euros(dt.abs())));
+    }
+    // Control del turno: anulaciones y devoluciones (las haga quien las haga) y lo eliminado en Barra
+    // antes de cobrar. Al cerrar lo da el servidor (0034 y 0035); al reimprimir un cierre antiguo
+    // se consulta (solo encargado).
+    try {
+      double uds, imp;
+      var anul = <({String tipo, int n, double importe})>[];
+      if (r['quitados_uds'] != null) {
+        uds = (r['quitados_uds'] as num).toDouble();
+        imp = (r['quitados_importe'] as num).toDouble();
+        anul = [
+          for (final a in (r['anulaciones'] as List?) ?? const [])
+            (tipo: a['tipo'] as String, n: (a['n'] as num).toInt(), importe: (a['importe'] as num).toDouble()),
+        ];
+      } else {
+        final filas = await supabase
+            .from('registro_anulaciones')
+            .select('tipo, cantidad, importe')
+            .gte('momento', turno['abierto_en'] as String)
+            .lte('momento', (cerradoEn ?? DateTime.now()).toUtc().toIso8601String());
+        final quitados = filas.where((f) => f['tipo'] == 'quitado_antes_cobrar');
+        uds = quitados.fold(0.0, (s, q) => s + ((q['cantidad'] as num?) ?? 0));
+        imp = quitados.fold(0.0, (s, q) => s + ((q['importe'] as num?) ?? 0));
+        final porTipo = <String, (int, double)>{};
+        for (final f in filas) {
+          if (f['tipo'] == 'quitado_antes_cobrar') continue;
+          final p = porTipo[f['tipo']] ?? (0, 0.0);
+          porTipo[f['tipo'] as String] = (p.$1 + 1, p.$2 + ((f['importe'] as num?) ?? 0));
+        }
+        anul = [for (final e in porTipo.entries) (tipo: e.key, n: e.value.$1, importe: e.value.$2)];
+      }
+      const nombres = {
+        'factura_anulada': 'facturas anuladas',
+        'devolucion': 'devoluciones',
+        'venta_anulada': 'ventas cobradas anuladas',
+        'pedido_anulado': 'cuentas anuladas',
+        'linea_anulada': 'productos anulados',
+        'linea_borrada': 'productos borrados',
+      };
+      l
+        ..add(('-', ''))
+        ..add(('ANULACIONES Y DEVOLUCIONES', null));
+      if (anul.isEmpty) l.add(('Ninguna', euros(0)));
+      for (final a in anul) {
+        l.add(('${a.n} ${nombres[a.tipo] ?? a.tipo}', euros(a.importe)));
+      }
+      l
+        ..add(('-', ''))
+        ..add(('PRODUCTOS ELIMINADOS', null))
+        ..add(('${uds.toStringAsFixed(0)} antes de cobrar', euros(imp)))
+        ..add(('Queda registrado quién hizo cada cosa.', ''));
+    } catch (_) {
+      // sin internet o sin la migración 0033: el cierre sale igual, sin estos apartados
+    }
+  } else {
+    l..add(('-', ''))..add(('El resultado lo revisa el encargado', ''));
+  }
+  final nota = (datos['nota'] as String?) ?? '';
+  if (nota.isNotEmpty) l..add(('-', ''))..add(('NOTA', null))..add((nota, ''));
+  l..add(('-', ''))..add(('Firma:', ''))..add(('', ''))..add(('', ''));
+
+  await Impresion.imprimirInforme('CIERRE DE CAJA', [
+    cajaNombre,
+    'Apertura ${f(DateTime.parse(turno['abierto_en'] as String).toLocal())}',
+    'Cierre   ${f(cerradoEn ?? DateTime.now())}',
+    'Cierra: ${cierra ?? Perfil.cache?.nombre ?? ''}',
+  ], l);
 }

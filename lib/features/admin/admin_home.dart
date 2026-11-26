@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import '../../core/aviso_sin_conexion.dart';
 import '../../core/avisos_listo.dart';
 import '../../core/empresa_dispositivo.dart';
+import '../../core/impresion.dart';
 import '../../core/pestanas.dart';
+import '../../core/software.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
 import '../auth/perfil.dart';
@@ -19,7 +21,6 @@ import '../control/margenes_page.dart';
 import '../control/panel_hoy_page.dart';
 import '../cocina/cocina_page.dart';
 import '../caja/cierres_page.dart';
-import '../gestion/caja_diaria_page.dart';
 import '../gestion/gastos_page.dart';
 import '../gestion/proveedores_page.dart';
 import '../gestion/resumen_page.dart';
@@ -52,7 +53,7 @@ class _AdminHomeState extends State<AdminHome> {
     (icono: Icons.local_bar_outlined, titulo: 'Barra', permisos: ['barra']),
     (icono: Icons.grid_view_rounded, titulo: 'Mesas', permisos: ['mesas']),
     (icono: Icons.soup_kitchen_outlined, titulo: 'Cocina', permisos: ['cocina']),
-    (icono: Icons.point_of_sale, titulo: 'Caja', permisos: ['caja', 'caja_diaria', 'cierres']),
+    (icono: Icons.point_of_sale, titulo: 'Caja', permisos: ['caja', 'cierres']),
     (icono: Icons.shopping_basket_outlined, titulo: 'Compras', permisos: ['gastos', 'proveedores', 'stock']),
     (icono: Icons.badge_outlined, titulo: 'Equipo', permisos: ['fichajes']),
     (icono: Icons.insights_outlined, titulo: 'Números', permisos: ['resumen', 'informes', 'facturas', 'anulaciones']),
@@ -64,6 +65,17 @@ class _AdminHomeState extends State<AdminHome> {
     for (final s in _secciones)
       if (s.permisos.any(widget.perfil.puede)) s,
   ];
+
+  /// Botones de la cabecera: misma altura y forma que la pastilla del usuario.
+  static final _estiloCabecera = OutlinedButton.styleFrom(
+    minimumSize: const Size(160, 48),
+    maximumSize: const Size(220, 48),
+    backgroundColor: C.blanco,
+    foregroundColor: C.tinta,
+    side: const BorderSide(color: C.borde),
+    shape: const StadiumBorder(),
+    textStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+  );
 
   Future<void> _empresas() async {
     final empresas = List<Map<String, dynamic>>.from(await supabase.rpc('mis_empresas'));
@@ -86,7 +98,7 @@ class _AdminHomeState extends State<AdminHome> {
           ]),
         ),
         actions: [
-          if (widget.perfil.esAdmin)
+          if (widget.perfil.esAdmin && Software.esProgramador) // dar de alta bares: solo el programador
             TextButton.icon(onPressed: () => Navigator.pop(ctx, '+'), icon: const Icon(Icons.add), label: const Text('Nueva empresa')),
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cerrar')),
         ],
@@ -173,7 +185,6 @@ class _AdminHomeState extends State<AdminHome> {
       'Cocina' => const CocinaPage(),
       'Caja' => Pestanas(pestanas: [
           (texto: 'Turno de hoy', icono: Icons.point_of_sale, permiso: 'caja', pagina: () => const CajaPage()),
-          (texto: 'Caja por días', icono: Icons.calendar_month_outlined, permiso: 'caja_diaria', pagina: () => const CajaDiariaPage()),
           (texto: 'Cierres y descuadres', icono: Icons.rule, permiso: 'cierres', pagina: () => const CierresPage()),
         ]),
       // Todo lo que entra al bar: facturas de proveedores y mercancía
@@ -244,7 +255,6 @@ class _AdminHomeState extends State<AdminHome> {
         body: SafeArea(
           child: AvisosListo(
             child: Row(children: [
-              if (!estrecho) menu,
               Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -274,15 +284,20 @@ class _AdminHomeState extends State<AdminHome> {
                           onPressed: _empresas,
                           icon: const Icon(Icons.storefront_outlined),
                         )
-                      else
+                      else ...[
+                        // Los tres de arriba, del mismo tamaño: empresa, quién está y abrir cajón
                         OutlinedButton.icon(
+                          style: _estiloCabecera,
                           onPressed: _empresas,
                           icon: const Icon(Icons.storefront_outlined),
-                          label: Text(widget.perfil.empresaNombre ?? 'Empresa'),
+                          label: Text(widget.perfil.empresaNombre ?? 'Empresa', overflow: TextOverflow.ellipsis),
                         ),
+                      ],
                       if (!estrecho) const SizedBox(width: 12),
                       if (!estrecho) Container(
-                        padding: const EdgeInsets.fromLTRB(6, 6, 14, 6),
+                        height: 48,
+                        constraints: const BoxConstraints(minWidth: 160),
+                        padding: const EdgeInsets.fromLTRB(6, 4, 14, 4),
                         decoration: BoxDecoration(
                           color: C.blanco,
                           border: Border.all(color: C.borde),
@@ -299,18 +314,25 @@ class _AdminHomeState extends State<AdminHome> {
                               ),
                             ),
                             const SizedBox(width: 10),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(widget.perfil.nombre,
-                                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-                                Text(widget.perfil.empresaNombre ?? '', style: const TextStyle(fontSize: 11, color: C.gris)),
-                              ],
-                            ),
+                            // Solo el nombre: la empresa ya se ve en el botón de al lado
+                            Text(widget.perfil.nombre, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
                           ],
                         ),
                       ),
+                      // A la derecha del todo, junto al usuario
+                      if (!estrecho && widget.perfil.puede('cobrar')) ...[
+                        const SizedBox(width: 12),
+                        OutlinedButton.icon(
+                          style: _estiloCabecera,
+                          onPressed: () => Impresion.abrirCajon().catchError((e) {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No se pudo abrir el cajón: $e')));
+                            }
+                          }),
+                          icon: const Icon(Icons.point_of_sale),
+                          label: const Text('Abrir cajón'),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -318,6 +340,7 @@ class _AdminHomeState extends State<AdminHome> {
               ],
             ),
           ),
+              if (!estrecho) menu, // el menú de secciones va a la derecha
             ]),
           ),
         ),
@@ -335,11 +358,12 @@ class _ItemMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = activo ? C.sobreAccion : C.gris;
+    // Sin seleccionar: texto claro y un fondo suave, para que se lean con mucha luz en la sala
+    final color = activo ? C.sobreAccion : const Color(0xFFE6E1D6);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Material(
-        color: activo ? C.verde : Colors.transparent,
+        color: activo ? C.verde : const Color(0xFF34322E),
         borderRadius: BorderRadius.circular(14),
         child: InkWell(
           borderRadius: BorderRadius.circular(14),

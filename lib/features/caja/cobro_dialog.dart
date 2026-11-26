@@ -15,6 +15,26 @@ typedef _Pago = ({String metodo, double importe, double? entregado});
 
 const _nombreMetodo = {'efectivo': 'Efectivo', 'tarjeta': 'Tarjeta', 'bizum': 'Bizum'};
 
+/// Última venta cobrada en este equipo, para tenerla a la vista (reclamaciones de cambio).
+class UltimaVenta {
+  static final ValueNotifier<({String hora, double total, String metodo, double? entregado, double? cambio})?> dato =
+      ValueNotifier(null);
+
+  /// [pagos]: {metodo, importe, entregado}.
+  static void guardar(num total, List<Map<String, dynamic>> pagos) {
+    final h = DateTime.now();
+    final entregado = pagos.fold(0.0, (s, p) => s + ((p['entregado'] as num?) ?? 0));
+    final enEfectivo = pagos.where((p) => p['entregado'] != null).fold(0.0, (s, p) => s + (p['importe'] as num));
+    dato.value = (
+      hora: '${h.hour.toString().padLeft(2, '0')}:${h.minute.toString().padLeft(2, '0')}',
+      total: total.toDouble(),
+      metodo: pagos.map((p) => _nombreMetodo[p['metodo']] ?? '${p['metodo']}').toSet().join(' + '),
+      entregado: entregado > 0 ? entregado : null,
+      cambio: entregado > 0 ? entregado - enEfectivo : null,
+    );
+  }
+}
+
 /// Cobra un pedido: admite varios pagos (mixto), ayuda a dividir a partes
 /// iguales y factura con NIF. Emite la factura TicketBAI, cierra el pedido y
 /// libera la mesa. Devuelve la factura emitida.
@@ -36,6 +56,41 @@ class _CobroDialogState extends State<CobroDialog> {
   bool _conNif = false;
   bool _cobrando = false;
   String? _error;
+
+  // Teclado de números de la propia ventana: escribe en la casilla elegida
+  late TextEditingController _destino = _entregado; // en efectivo, lo normal es marcar lo entregado
+  bool _nuevo = true; // la primera tecla sustituye lo que hubiera en la casilla
+
+  void _elegir(TextEditingController c) => setState(() {
+        _destino = c;
+        _nuevo = true;
+      });
+
+  void _pulsar(String d) {
+    var t = _nuevo ? '' : _destino.text.replaceAll('.', ',');
+    if (d == ',') {
+      if (t.contains(',')) return;
+      if (t.isEmpty) t = '0';
+    } else {
+      final i = t.indexOf(',');
+      if (i >= 0 && t.length - i > 2) return; // dos decimales
+      if (t == '0') t = '';
+    }
+    if (t.length >= 8) return;
+    setState(() {
+      _destino.text = t + d;
+      _nuevo = false;
+      _error = null;
+    });
+  }
+
+  void _borrarTecla({bool todo = false}) {
+    final t = _destino.text;
+    setState(() {
+      _destino.text = todo || t.isEmpty ? '' : t.substring(0, t.length - 1);
+      _nuevo = false;
+    });
+  }
 
   late final List<LineaFactura> _lineas = [
     for (final d in ((widget.pedido['pedido_detalle'] as List?) ?? []).cast<Map<String, dynamic>>())
@@ -85,6 +140,7 @@ class _CobroDialogState extends State<CobroDialog> {
       _error = null;
       _entregado.clear();
       _ponerImporte(_restante);
+      _nuevo = true;
     });
     return true;
   }
@@ -207,6 +263,7 @@ class _CobroDialogState extends State<CobroDialog> {
         ],
         if (widget.mesaId == null) 'origen': 'Barra',
       };
+      UltimaVenta.guardar(_total, List<Map<String, dynamic>>.from(paraTicket['pagos'] as List));
       if (mounted) Navigator.pop(context, paraTicket);
     } catch (e) {
       setState(() {
@@ -232,11 +289,17 @@ class _CobroDialogState extends State<CobroDialog> {
         : terminado || _importeActual >= _restante - 0.001
             ? 'Cobrar y emitir ticket'
             : 'Añadir pago · faltarán ${euros(_restante - _importeActual)}';
+    // Pantalla ancha (TPV): teclado de números y cambio al lado. En el móvil, el teclado normal.
+    final conTeclado = MediaQuery.sizeOf(context).width >= 860;
+    final tipoTeclado = conTeclado ? TextInputType.none : const TextInputType.numberWithOptions(decimal: true);
+    const marcada = Color(0xFFE3F1EC); // casilla en la que escribe el teclado
 
     return AlertDialog(
       title: const Text('Cobrar'),
       content: SizedBox(
-        width: 480,
+        width: conTeclado && !terminado ? 760 : 480,
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Expanded(
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -286,7 +349,11 @@ class _CobroDialogState extends State<CobroDialog> {
                           texto: _nombreMetodo[m]!,
                           icono: icono,
                           activo: _metodo == m,
-                          onTap: () => setState(() => _metodo = m),
+                          onTap: () => setState(() {
+                            _metodo = m;
+                            _destino = m == 'efectivo' ? _entregado : _importe;
+                            _nuevo = true;
+                          }),
                         ),
                       ),
                     ),
@@ -296,8 +363,15 @@ class _CobroDialogState extends State<CobroDialog> {
                   Expanded(
                     child: TextField(
                       controller: _importe,
+                      keyboardType: tipoTeclado,
+                      onTap: () => _elegir(_importe),
                       onChanged: (_) => setState(() {}),
-                      decoration: InputDecoration(labelText: 'Importe con ${_nombreMetodo[_metodo]!.toLowerCase()}', suffixText: '€'),
+                      decoration: InputDecoration(
+                        labelText: 'Importe con ${_nombreMetodo[_metodo]!.toLowerCase()}',
+                        suffixText: '€',
+                        filled: conTeclado && _destino == _importe,
+                        fillColor: marcada,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -317,16 +391,30 @@ class _CobroDialogState extends State<CobroDialog> {
                   const SizedBox(height: 12),
                   TextField(
                     controller: _entregado,
+                    keyboardType: tipoTeclado,
+                    onTap: () => _elegir(_entregado),
                     onChanged: (_) => setState(() {}),
-                    decoration: const InputDecoration(labelText: 'Entregado (opcional)', suffixText: '€'),
+                    decoration: InputDecoration(
+                      labelText: 'Entregado (opcional)',
+                      suffixText: '€',
+                      filled: conTeclado && _destino == _entregado,
+                      fillColor: marcada,
+                    ),
                   ),
                   const SizedBox(height: 8),
                   Wrap(spacing: 6, children: [
                     for (final b in [5, 10, 20, 50, 100])
                       if (b >= _importeActual)
-                        ActionChip(label: Text('$b €'), onPressed: () => setState(() => _entregado.text = '$b')),
+                        ActionChip(
+                          label: Text('$b €'),
+                          onPressed: () => setState(() {
+                            _entregado.text = '$b';
+                            _destino = _entregado;
+                            _nuevo = true;
+                          }),
+                        ),
                   ]),
-                  if (cambio != null && cambio >= 0) ...[
+                  if (!conTeclado && cambio != null && cambio >= 0) ...[
                     const SizedBox(height: 8),
                     Row(children: [
                       const Text('Cambio', style: TextStyle(fontWeight: FontWeight.w600)),
@@ -365,6 +453,20 @@ class _CobroDialogState extends State<CobroDialog> {
             ],
           ),
         ),
+        ),
+        if (conTeclado && !terminado) ...[
+          const SizedBox(width: 16),
+          SizedBox(
+            width: 250,
+            child: _TecladoCobro(
+              cambio: _metodo == 'efectivo' ? cambio : null,
+              alPulsar: _pulsar,
+              alBorrar: _borrarTecla,
+              alLimpiar: () => _borrarTecla(todo: true),
+            ),
+          ),
+        ],
+        ]),
       ),
       actions: [
         const InterruptorTicket(),
@@ -405,4 +507,57 @@ class _BotonMetodo extends StatelessWidget {
           ),
         ),
       );
+}
+
+/// Cajita de números de la ventana de cobro, con el cambio bien a la vista antes de cobrar.
+class _TecladoCobro extends StatelessWidget {
+  const _TecladoCobro({required this.cambio, required this.alPulsar, required this.alBorrar, required this.alLimpiar});
+  final double? cambio; // null: aún no se ha marcado lo entregado (o no es efectivo)
+  final ValueChanged<String> alPulsar;
+  final VoidCallback alBorrar, alLimpiar;
+
+  Widget _tecla(Widget hijo, VoidCallback alTocar, {VoidCallback? alMantener}) => Expanded(
+        child: Padding(
+          padding: const EdgeInsets.all(3),
+          child: Material(
+            color: C.blanco,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: C.bordeFuerte)),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              canRequestFocus: false,
+              onTap: alTocar,
+              onLongPress: alMantener,
+              child: SizedBox(height: 58, child: Center(child: hijo)),
+            ),
+          ),
+        ),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final c = cambio;
+    final falta = c != null && c < -0.004;
+    return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Container(
+        margin: const EdgeInsets.fromLTRB(3, 0, 3, 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: c == null ? C.crema : (falta ? const Color(0xFFFBE9E7) : const Color(0xFFE3F1EC)),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(falta ? 'Faltan' : 'Cambio', style: const TextStyle(color: C.gris, fontWeight: FontWeight.w600)),
+          Text(c == null ? '—' : euros(c.abs()),
+              style: titulo(32, color: c == null ? C.gris : (falta ? const Color(0xFFB3261E) : C.verde))),
+        ]),
+      ),
+      for (final fila in const [['7', '8', '9'], ['4', '5', '6'], ['1', '2', '3']])
+        Row(children: [for (final d in fila) _tecla(Text(d, style: titulo(24)), () => alPulsar(d))]),
+      Row(children: [
+        _tecla(Text(',', style: titulo(24)), () => alPulsar(',')),
+        _tecla(Text('0', style: titulo(24)), () => alPulsar('0')),
+        _tecla(const Icon(Icons.backspace_outlined), alBorrar, alMantener: alLimpiar), // mantener: borra todo
+      ]),
+    ]);
+  }
 }

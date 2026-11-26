@@ -141,16 +141,17 @@ class _ProductoDialogState extends State<ProductoDialog> {
       return n == null || n < 0 ? 'Importe no válido' : null;
     }
 
+    final ancha = MediaQuery.sizeOf(context).width >= 1000;
     return PanelLateral(
+      anchura: ancha ? double.infinity : 460, // en el TPV, a lo ancho de toda la pantalla
       encabezado: p == null ? 'Nuevo producto' : 'Editar producto',
       boton: _guardando ? 'Guardando…' : 'Guardar producto',
       onBoton: _guardando ? null : _guardar,
       cuerpo: Form(
           key: _form,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
+            child: Builder(builder: (context) {
+              // Tres bloques: datos, imagen y extras, alérgenos. En el TPV van en columnas, a lo ancho
+              final datos = <Widget>[
                 TextFormField(
                   controller: _nombre,
                   autofocus: true,
@@ -206,7 +207,28 @@ class _ProductoDialogState extends State<ProductoDialog> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<double>(
+                  isExpanded: true,
+                  initialValue: _iva,
+                  decoration: const InputDecoration(labelText: 'IVA', border: OutlineInputBorder()),
+                  items: const [
+                    DropdownMenuItem(value: 10, child: Text('10 % · se consume en el bar (lo normal)', overflow: TextOverflow.ellipsis)),
+                    DropdownMenuItem(value: 21, child: Text('21 % · para llevar: alcohol, refrescos azucarados, tabaco', overflow: TextOverflow.ellipsis)),
+                    DropdownMenuItem(value: 4, child: Text('4 % · para llevar: pan, leche', overflow: TextOverflow.ellipsis)),
+                  ],
+                  onChanged: (v) => setState(() => _iva = v ?? 10),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Disponible en carta'),
+                  value: _activo,
+                  onChanged: (v) => setState(() => _activo = v),
+                ),
+                if (_error != null)
+                  Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+              ];
+              final extras = <Widget>[
                 Row(children: [
                   ClipRRect(
                     borderRadius: BorderRadius.circular(12),
@@ -252,7 +274,8 @@ class _ProductoDialogState extends State<ProductoDialog> {
                         onSelected: (s) => setState(() => s ? _modsSel.add(m['id'] as String) : _modsSel.remove(m['id'])),
                       ),
                   ]),
-                const SizedBox(height: 16),
+              ];
+              final alergias = <Widget>[
                 const Text('Alérgenos'),
                 const SizedBox(height: 8),
                 Wrap(
@@ -269,27 +292,20 @@ class _ProductoDialogState extends State<ProductoDialog> {
                       ),
                   ],
                 ),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<double>(
-                  initialValue: _iva,
-                  decoration: const InputDecoration(labelText: 'IVA', border: OutlineInputBorder()),
-                  items: const [
-                    DropdownMenuItem(value: 10, child: Text('10 % · se consume en el bar (lo normal)')),
-                    DropdownMenuItem(value: 21, child: Text('21 % · para llevar: alcohol, refrescos azucarados, tabaco')),
-                    DropdownMenuItem(value: 4, child: Text('4 % · para llevar: pan, leche')),
-                  ],
-                  onChanged: (v) => setState(() => _iva = v ?? 10),
-                ),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Disponible en carta'),
-                  value: _activo,
-                  onChanged: (v) => setState(() => _activo = v),
-                ),
-                if (_error != null)
-                  Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
-              ],
-            ),
+              ];
+              Widget columna(List<Widget> hijos) =>
+                  Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: hijos);
+              if (!ancha) {
+                return columna([...datos, const SizedBox(height: 16), ...extras, const SizedBox(height: 16), ...alergias]);
+              }
+              return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(flex: 5, child: columna(datos)),
+                const SizedBox(width: 28),
+                Expanded(flex: 4, child: columna(extras)),
+                const SizedBox(width: 28),
+                Expanded(flex: 4, child: columna(alergias)),
+              ]);
+            }),
       ),
     );
   }

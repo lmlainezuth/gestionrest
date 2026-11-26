@@ -174,78 +174,6 @@ class _CopiasTabState extends State<CopiasTab> {
     if (mounted) setState(() => _trabajando = false);
   }
 
-  /// Importa la copia de seguridad de Yitso (caja diaria, gastos y proveedores).
-  Future<void> _importarYitso() async {
-    final f = await FilePicker.pickFile();
-    if (f == null) return;
-    Map<String, dynamic> d;
-    try {
-      d = jsonDecode(utf8.decode(await f.readAsBytes())) as Map<String, dynamic>;
-      if (d['cajas'] is! List || d['gastos'] is! List || d['proveedores'] is! List) throw 'No es una copia de Yitso';
-    } catch (e) {
-      setState(() => _estado = 'Archivo no válido: $e');
-      return;
-    }
-    setState(() {
-      _trabajando = true;
-      _estado = 'Importando Yitso…';
-    });
-    final uuid = RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', caseSensitive: false);
-    String? idOk(Object? id) => id is String && uuid.hasMatch(id) ? id : null;
-    String ivaTxt(Object? v) => v == 'mixto' ? 'mixto' : '${(v as num?)?.toInt() ?? 10}';
-    try {
-      final provs = [
-        for (final p in (d['proveedores'] as List).cast<Map<String, dynamic>>())
-          {
-            if (idOk(p['id']) != null) 'id': p['id'],
-            'nombre': p['nombre'],
-            'suministra': p['suministra'] ?? '',
-            'telefono': p['telefono'] ?? '',
-            'iva_habitual': ivaTxt(p['ivaHabitual']),
-            'icono': p['icono'] ?? 'box',
-          },
-      ];
-      final idsProv = provs.map((p) => p['id']).whereType<String>().toSet();
-      final cajas = [
-        for (final c in (d['cajas'] as List).cast<Map<String, dynamic>>())
-          {
-            'fecha': c['fecha'],
-            'total': c['total'] ?? 0,
-            'efectivo': c['efectivo'],
-            'tarjeta': c['tarjeta'],
-            'estado': c['estado'] == 'pendiente' ? 'pendiente' : 'cerrada',
-            'notas': c['notas'],
-          },
-      ];
-      final gastos = [
-        for (final g in (d['gastos'] as List).cast<Map<String, dynamic>>())
-          {
-            if (idOk(g['id']) != null) 'id': g['id'],
-            'proveedor_id': idsProv.contains(g['proveedorId']) ? g['proveedorId'] : null,
-            'fecha': g['fecha'],
-            'concepto': g['concepto'] ?? '',
-            'importe': g['importe'] ?? 0,
-            'categoria': ['fijos', 'materia', 'otros'].contains(g['categoria']) ? g['categoria'] : 'otros',
-            'iva_tipo': ivaTxt(g['ivaTipo']),
-            'iva_importe': g['ivaTipo'] == 'mixto' ? g['ivaImporte'] : null,
-            'estado': g['estado'] == 'pendiente' ? 'pendiente' : 'registrado',
-          },
-      ];
-      Future<void> subir(String tabla, List<Map<String, dynamic>> filas, String clave) async {
-        for (var i = 0; i < filas.length; i += 500) {
-          await supabase.from(tabla).upsert(filas.sublist(i, i + 500 > filas.length ? filas.length : i + 500), onConflict: clave);
-        }
-      }
-      await subir('proveedores', provs, 'id');
-      await subir('cajas_diarias', cajas, 'empresa_id,fecha');
-      await subir('gastos', gastos, 'id');
-      setState(() => _estado = 'Yitso importado: ${provs.length} proveedores · ${cajas.length} cajas · ${gastos.length} gastos');
-    } catch (e) {
-      setState(() => _estado = 'Error al importar Yitso: $e');
-    }
-    if (mounted) setState(() => _trabajando = false);
-  }
-
   @override
   Widget build(BuildContext context) {
     return ListView(
@@ -275,23 +203,6 @@ class _CopiasTabState extends State<CopiasTab> {
             onPressed: _trabajando ? null : _restaurar,
             icon: const Icon(Icons.restore),
             label: const Text('Restaurar una copia…'),
-          ),
-        ),
-        const SizedBox(height: 28),
-        Text('Traer datos de Yitso', style: titulo(22)),
-        const SizedBox(height: 8),
-        const Text(
-          'En Yitso ve a Mi empresa → Copia de seguridad → Exportar, y elige aquí ese archivo. '
-          'Se añaden la caja diaria, los gastos y los proveedores a la empresa actual.',
-          style: TextStyle(color: C.gris, height: 1.5),
-        ),
-        const SizedBox(height: 12),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: OutlinedButton.icon(
-            onPressed: _trabajando ? null : _importarYitso,
-            icon: const Icon(Icons.move_down),
-            label: const Text('Importar copia de Yitso…'),
           ),
         ),
         const SizedBox(height: 16),

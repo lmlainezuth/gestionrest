@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/pedir_cantidad.dart';
 import '../../core/red.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
@@ -115,7 +116,26 @@ class _ComandaPageState extends State<ComandaPage> {
 
   // ---------------- Ronda ----------------
 
-  Future<void> _anadir(Map<String, dynamic> p) async {
+  /// Mantener pulsado un producto: se marca la cantidad y se añade de golpe.
+  Future<void> _anadirVarios(Map<String, dynamic> p) async {
+    final n = await pedirCantidad(context, titulo: '¿Cuántos? · ${p['nombre']}');
+    if (n != null && mounted) await _anadir(p, cantidad: n.toDouble());
+  }
+
+  /// Tocar el número de una línea: se escribe la cantidad (0 la quita).
+  Future<void> _fijarCantidad(_Linea l) async {
+    final n = await pedirCantidad(context, titulo: l.producto['nombre'] as String, permiteCero: true);
+    if (n == null || !mounted) return;
+    setState(() {
+      if (n == 0) {
+        _ronda.remove(l);
+      } else {
+        l.cantidad = n.toDouble();
+      }
+    });
+  }
+
+  Future<void> _anadir(Map<String, dynamic> p, {double cantidad = 1}) async {
     final mods = await elegirModificadores(context, p);
     if (mods == null || !mounted) return;
     final esBarra = _areas[p['area_id']] == 'Barra';
@@ -125,9 +145,9 @@ class _ComandaPageState extends State<ComandaPage> {
         l.producto['id'] == p['id'] && l.nota.isEmpty && l.curso == curso && claveModificadores(l.mods) == clave);
     setState(() {
       if (existente.isNotEmpty) {
-        existente.first.cantidad++;
+        existente.first.cantidad += cantidad;
       } else {
-        _ronda.add(_Linea(p, curso, mods));
+        _ronda.add(_Linea(p, curso, mods)..cantidad = cantidad);
       }
     });
   }
@@ -467,6 +487,7 @@ class _ComandaPageState extends State<ComandaPage> {
                         producto: p,
                         cantidad: _cantidadEnRonda(p['id'] as String),
                         onTap: () => _anadir(p),
+                        onLongPress: () => _anadirVarios(p),
                       ),
                   ],
                 ),
@@ -631,9 +652,15 @@ class _ComandaPageState extends State<ComandaPage> {
               }
             }),
           ),
-          SizedBox(
-            width: 32,
-            child: Text(l.cantidad.toStringAsFixed(0), textAlign: TextAlign.center, style: titulo(18)),
+          InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () => _fijarCantidad(l),
+            child: Container(
+              constraints: const BoxConstraints(minWidth: 40),
+              height: 36,
+              alignment: Alignment.center,
+              child: Text(l.cantidad.toStringAsFixed(0), textAlign: TextAlign.center, style: titulo(18)),
+            ),
           ),
           _Paso(icono: Icons.add, onTap: () => setState(() => l.cantidad++)),
           const SizedBox(width: 10),
@@ -747,10 +774,11 @@ class ChipGrupo extends StatelessWidget {
 }
 
 class BotonProducto extends StatelessWidget {
-  const BotonProducto({required this.producto, required this.cantidad, required this.onTap});
+  const BotonProducto({required this.producto, required this.cantidad, required this.onTap, this.onLongPress});
   final Map<String, dynamic> producto;
   final double cantidad;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress; // mantener pulsado: marcar la cantidad
 
   @override
   Widget build(BuildContext context) {
@@ -764,6 +792,7 @@ class BotonProducto extends StatelessWidget {
       child: InkWell(
         borderRadius: BorderRadius.circular(14),
         onTap: onTap,
+        onLongPress: onLongPress,
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Stack(
