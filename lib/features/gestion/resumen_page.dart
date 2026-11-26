@@ -569,7 +569,7 @@ class _ResumenPageState extends State<ResumenPage> {
       if (n < 2) return;
       final p = k.split('|');
       final quien = p[0].length == 7 ? p[1].toUpperCase() : p[1];
-      final cuando = p[0].length == 7 ? '${_cap(meses[int.parse(p[0].substring(5)) - 1])}' : fechaCorta(p[0]);
+      final cuando = p[0].length == 7 ? _cap(meses[int.parse(p[0].substring(5)) - 1]) : fechaCorta(p[0]);
       alertas.add((
         icono: Icons.content_copy_outlined,
         color: _rojo,
@@ -650,13 +650,13 @@ class _ResumenPageState extends State<ResumenPage> {
                 Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     const Text('Ventas previstas', style: TextStyle(color: C.gris, fontSize: 13)),
-                    Text(euros(ventasPrev!), style: titulo(24)),
+                    Text(euros(ventasPrev), style: titulo(24)),
                   ]),
                 ),
                 Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     const Text('Resultado previsto', style: TextStyle(color: C.gris, fontSize: 13)),
-                    Text(euros(resultadoPrev!), style: titulo(24, color: resultadoPrev! >= 0 ? C.verde : _rojo)),
+                    Text(euros(resultadoPrev!), style: titulo(24, color: resultadoPrev >= 0 ? C.verde : _rojo)),
                   ]),
                 ),
               ]),

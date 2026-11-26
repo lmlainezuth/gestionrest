@@ -211,6 +211,7 @@ class VentaOffline {
       _exclusivo(() async {
         final m = await _mapa(_kCuentas);
         final c = Map<String, dynamic>.from((m[pedido['id']] as Map?) ?? {'pedido': _base(pedido), 'nuevas': []});
+        c['empresa_id'] ??= await _empresaContexto();
         c['nuevas'] = [
           ...c['nuevas'] as List,
           for (final l in lineas) {...l, 'id': _uuid(), 'pedido_id': pedido['id'], 'curso': 'ya'},
@@ -218,6 +219,13 @@ class VentaOffline {
         m[pedido['id'] as String] = c;
         await _guardarMapa(_kCuentas, m);
       });
+
+  /// Bar al que pertenece lo que se apunta sin internet (el del último contexto guardado).
+  static Future<String?> _empresaContexto() async {
+    final s = (await SharedPreferences.getInstance()).getString(_kContexto);
+    if (s == null) return null;
+    return ((jsonDecode(s) as Map)['config'] as Map?)?['empresa_id'] as String?;
+  }
 
   // ---------- Venta ----------
 
@@ -314,6 +322,7 @@ class VentaOffline {
       'cierre': {'estado': 'pagado', 'pagado_en': ahora, 'turno_id': ctx['turno_id']},
       'mesa_id': pedido['mesa_id'],
       'factura': factura,
+      'empresa_id': config['empresa_id'], // al subir se comprueba que la sesión es de este bar
     };
     // Primero se guarda (cola y cadena) y después se imprime: nunca un ticket sin rastro
     final lista = await cola();
@@ -361,6 +370,19 @@ class VentaOffline {
       final p = await SharedPreferences.getInstance();
       // 1 · Mesas y cuentas apuntadas sin internet (sin cobrar todavía)
       final cuentas = await _mapa(_kCuentas);
+      // Lo apuntado sin internet solo sube con la sesión de SU bar: si en este equipo se ha
+      // cambiado de bar, no se sube nada (caería en el bar equivocado)
+      final deBares = {
+        for (final c in cuentas.values) (c as Map)['empresa_id'],
+        for (final v in await cola()) v['empresa_id'],
+      }..remove(null);
+      if (deBares.isNotEmpty) {
+        final actual = (await supabase.from('tbai_config').select('empresa_id').limit(1).single())['empresa_id'];
+        if (deBares.any((b) => b != actual)) {
+          ultimoError = 'Este equipo tiene ventas sin internet de otro bar: entra en ese bar para que suban';
+          return 0;
+        }
+      }
       for (final e in cuentas.entries) {
         final c = Map<String, dynamic>.from(e.value as Map);
         final ped = Map<String, dynamic>.from(c['pedido'] as Map);

@@ -1,6 +1,5 @@
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart' show debugPrint;
 import '../../core/software.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 

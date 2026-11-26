@@ -153,7 +153,8 @@ Deno.serve(async (req) => {
       // Solo para el servicio puente de Netlify (conoce el secreto compartido)
       const secreto = Deno.env.get('PUENTE_SECRETO');
       if (!secreto || req.headers.get('x-puente-secreto') !== secreto) return json({ error: 'No autorizado' }, 403);
-      return json({ p12, clave });
+      // El entorno lo decide la configuración del bar, no lo que diga la app
+      return json({ p12, clave, entorno: config.entorno });
     }
     if (config.entorno !== 'pruebas' && config.entorno !== 'produccion') {
       return json({ error: `El entorno es "${config.entorno}": cámbialo a pruebas o producción` }, 400);

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../core/red.dart';
 import '../../core/aviso_sin_conexion.dart';
-import '../../core/conexion.dart';
 import '../../core/panel_lateral.dart';
 
 import '../../core/tema.dart';

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/aviso_sin_conexion.dart';
-import '../../core/conexion.dart';
 import '../../core/red.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
@@ -97,7 +96,7 @@ class _UsuariosPageState extends State<UsuariosPage> {
             keyboardType: TextInputType.number,
             textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 28, letterSpacing: 12),
-            decoration: const InputDecoration(labelText: 'PIN (1 a 8 cifras)', counterText: ''),
+            decoration: InputDecoration(labelText: p['rol'] == 'admin' ? 'PIN (6 a 8 cifras)' : 'PIN (1 a 8 cifras)', counterText: ''),
           ),
         ),
         actions: [
@@ -311,7 +310,7 @@ class _NuevoUsuarioState extends State<_NuevoUsuario> {
               keyboardType: TextInputType.number,
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 28, letterSpacing: 12),
-              decoration: const InputDecoration(labelText: 'PIN (1 a 8 cifras)', counterText: ''),
+              decoration: InputDecoration(labelText: _rol == 'admin' ? 'PIN (6 a 8 cifras)' : 'PIN (1 a 8 cifras)', counterText: ''),
             ),
             const SizedBox(height: 16),
             SegmentedButton<String>(

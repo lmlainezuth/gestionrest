@@ -36,14 +36,32 @@ Deno.serve(async (req) => {
   const b = await req.json();
   const pin = String(b.pin ?? "");
   if (!/^\d{1,8}$/.test(pin)) return json({ error: "El PIN debe tener entre 1 y 8 cifras" }, 400);
+  // Un administrador lo puede todo en su bar: su PIN no puede ser de los que se adivinan probando
+  const PIN_ADMIN = 6;
+  const pinCorto = (rol: string) => rol === "admin" && pin.length < PIN_ADMIN;
+  const avisoPinCorto = `El PIN de un administrador debe tener al menos ${PIN_ADMIN} cifras`;
 
   // Cambiar el PIN de un usuario existente
   if (b.accion === "pin") {
-    const { data: miembro } = await admin.from("empresa_usuarios").select("usuario_id")
+    const { data: miembro } = await admin.from("empresa_usuarios").select("usuario_id, rol")
       .eq("empresa_id", empresa).eq("usuario_id", String(b.id)).maybeSingle();
     if (!miembro) return json({ error: "Ese usuario no es de tu empresa" }, 403);
     const { data: p } = await admin.from("perfiles").select("correo").eq("id", String(b.id)).single();
     if (!p?.correo) return json({ error: "Usuario no encontrado" }, 404);
+    // Solo cuentas de PIN: la contraseña de una cuenta con correo la cambia su dueño
+    if (!p.correo.endsWith("@gestionrest.local")) {
+      return json({ error: "Este usuario entra con correo y contraseña: su clave no se cambia desde aquí" }, 403);
+    }
+    // Quien también trabaja en otro bar no depende de este administrador (salvo que sea uno mismo)
+    if (String(b.id) !== user.id) {
+      const { data: otras, error: errOtras } = await admin.from("empresa_usuarios").select("empresa_id")
+        .eq("usuario_id", String(b.id)).neq("empresa_id", empresa).limit(1);
+      if (errOtras) return json({ error: errOtras.message }, 400);
+      if (otras && otras.length > 0) {
+        return json({ error: "Este usuario también está en otro bar: solo él puede cambiar su PIN" }, 403);
+      }
+    }
+    if (pinCorto(miembro.rol)) return json({ error: avisoPinCorto }, 400);
     const { error } = await admin.auth.admin.updateUserById(String(b.id), {
       password: claveDePin(pin, p.correo),
     });
@@ -55,6 +73,7 @@ Deno.serve(async (req) => {
   const rol = String(b.rol ?? "");
   if (!nombre) return json({ error: "Escribe el nombre" }, 400);
   if (!["admin", "camarero", "cocinero"].includes(rol)) return json({ error: "Rol no válido" }, 400);
+  if (pinCorto(rol)) return json({ error: avisoPinCorto }, 400);
 
   const correo = `u${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}@gestionrest.local`;
   const { data, error } = await admin.auth.admin.createUser({

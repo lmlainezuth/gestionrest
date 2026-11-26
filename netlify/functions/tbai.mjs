@@ -35,7 +35,8 @@ async function leerCertificado(auth) {
   });
   const d = await r.json();
   if (!d.p12) throw new Error(d.error ?? 'No se pudo obtener el certificado');
-  const certificado = { pfx: Buffer.from(d.p12, 'base64'), passphrase: d.clave ?? '' };
+  // entorno: el configurado en el bar (undefined si la función "ticketbai" aún no lo devuelve)
+  const certificado = { pfx: Buffer.from(d.p12, 'base64'), passphrase: d.clave ?? '', entorno: d.entorno };
   if (certificados.size > 100) certificados.clear();
   certificados.set(auth, certificado);
   return certificado;
@@ -80,8 +81,17 @@ export default async (req) => {
 
     const { xmlFirmado, entorno, baja, servicio } = await req.json();
     if (!xmlFirmado || !String(xmlFirmado).includes('SignatureValue')) return json({ error: 'Falta el XML firmado' }, 400);
-    const host = entorno === 'produccion' ? 'tbai-z.egoitza.gipuzkoa.eus' : 'tbai-z.prep.gipuzkoa.eus';
-    const cert = await leerCertificado(auth);
+    let cert = await leerCertificado(auth);
+    // El entorno es el configurado en el bar, no el que diga la app. Si no coinciden, se vuelve a
+    // leer (el bar pudo pasar a producción con la función caliente) y, si sigue sin coincidir, no se envía
+    if (cert.entorno && cert.entorno !== entorno) {
+      certificados.delete(auth);
+      cert = await leerCertificado(auth);
+      if (cert.entorno && cert.entorno !== entorno) {
+        return json({ error: `El entorno pedido (${entorno}) no es el configurado en el bar (${cert.entorno})` }, 400);
+      }
+    }
+    const host = (cert.entorno ?? entorno) === 'produccion' ? 'tbai-z.egoitza.gipuzkoa.eus' : 'tbai-z.prep.gipuzkoa.eus';
     // servicio: alta, baja o zuzendu-alta (subsanación). Las apps antiguas solo mandan "baja"
     const ruta = ['alta', 'baja', 'zuzendu-alta'].includes(servicio) ? servicio : baja ? 'baja' : 'alta';
     const r = await enviar(host, `/sarrerak/${ruta}`, xmlFirmado, cert);

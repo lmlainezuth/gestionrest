@@ -2,7 +2,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/aviso_sin_conexion.dart';
-import '../../core/conexion.dart';
 import '../../core/red.dart';
 import '../../core/certificado_equipo.dart';
 import '../../core/firma_equipo.dart' if (dart.library.io) '../../core/firma_equipo_io.dart';

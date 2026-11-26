@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../../core/aviso_sin_conexion.dart';
-import '../../core/conexion.dart';
 import '../../core/red.dart';
 import '../../core/impresion.dart';
 import '../../core/tema.dart';
@@ -12,6 +11,7 @@ import 'cierre_ciego.dart';
 import '../ticketbai/modelos.dart' show euros;
 import 'abrir_caja.dart';
 import 'caja_service.dart';
+import '../barra/venta_offline.dart';
 
 /// Turno de caja: apertura con fondo, ventas por forma de pago,
 /// ingresos y gastos, y cierre con arqueo.
@@ -148,6 +148,20 @@ class _CajaPageState extends State<CajaPage> {
 
   /// Cuadre ciego: se cuenta sin ver lo esperado; el servidor calcula y guarda la diferencia.
   Future<void> _cerrar() async {
+    // Antes de cerrar suben las ventas cobradas sin internet en este equipo: si se quedaran
+    // en la cola, entrarían después en un turno ya cerrado y el cierre no cuadraría
+    try {
+      await VentaOffline.sincronizar();
+    } catch (_) {}
+    final cola = await VentaOffline.cola();
+    if (!mounted) return;
+    if (cola.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Hay ${cola.length} ventas hechas sin internet que aún no se han subido'
+              '${VentaOffline.ultimoError == null ? '' : ' (${VentaOffline.ultimoError})'}. '
+              'Recupera la conexión y espera a que suban antes de cerrar la caja')));
+      return;
+    }
     final datos = await contarCajaCiega(context,
         aviso: _mesasAbiertas > 0 ? 'Atención: hay $_mesasAbiertas cuentas sin cobrar ($_sinCobrarDetalle)' : null,
         fondo: (_turno!['efectivo_inicial'] as num).toDouble());

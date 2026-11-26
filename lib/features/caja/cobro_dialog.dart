@@ -234,27 +234,23 @@ class _CobroDialogState extends State<CobroDialog> {
             cliente: _conNif ? _cliente : null,
             enviarEnSegundoPlano: true,
           );
-      await Future.wait([
-        supabase.from('pagos').insert([
-        for (final p in _pagos)
-          {
-            'pedido_id': widget.pedido['id'],
-            'turno_id': turno['id'],
-            'metodo': p.metodo,
-            'importe': p.importe,
-            if (p.entregado != null) 'pago_con': p.entregado,
-            if (p.entregado != null) 'vuelto': p.entregado! - p.importe,
-          },
-        ]),
-        supabase.from('pedidos').update({
-          'estado': 'pagado',
-          'pagado_en': DateTime.now().toUtc().toIso8601String(),
-          'turno_id': turno['id'],
-          if (_conNif) 'cliente_id': _cliente!['id'],
-        }).eq('id', widget.pedido['id']),
-        if (widget.mesaId != null)
-          supabase.from('mesas').update({'disponibilidad': 'libre'}).eq('id', widget.mesaId!),
-      ]);
+      // Pagos, pedido pagado y mesa libre en una sola transacción (migración 0036): si falla,
+      // no queda nada a medias; si se reintenta y ya estaba cobrado, no repite los pagos
+      await supabase.rpc('cobrar_pedido', params: {
+        'p_pedido': widget.pedido['id'],
+        'p_turno': turno['id'],
+        'p_pagos': [
+          for (final p in _pagos)
+            {
+              'metodo': p.metodo,
+              'importe': p.importe,
+              if (p.entregado != null) 'pago_con': p.entregado,
+              if (p.entregado != null) 'vuelto': p.entregado! - p.importe,
+            },
+        ],
+        if (_conNif) 'p_cliente': _cliente!['id'],
+        if (widget.mesaId != null) 'p_mesa': widget.mesaId,
+      });
       // Para el ticket: forma de pago y, en venta rápida, que es de barra
       final paraTicket = {
         ...factura,
