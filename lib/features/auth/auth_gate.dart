@@ -7,6 +7,7 @@ import '../../main.dart';
 import '../admin/admin_home.dart';
 import '../camarero/camarero_home.dart';
 import '../cocina/cocina_home.dart';
+import 'cambiar_pin_page.dart';
 import 'login_page.dart';
 import 'perfil.dart';
 
@@ -23,6 +24,7 @@ class _AuthGateState extends State<AuthGate> {
   // cada aviso de sesión (inicio, renovación del token...) y se veían dos cargas seguidas.
   Future<(Perfil?, List<Map<String, dynamic>>)>? _futuro;
   String? _claveFuturo;
+  bool _cambiarPin = false; // PIN de menos de 6 cifras: hay que cambiarlo antes de seguir
 
   Future<(Perfil?, List<Map<String, dynamic>>)> _futuroPara(String clave) {
     if (_futuro == null || _claveFuturo != clave) {
@@ -41,6 +43,8 @@ class _AuthGateState extends State<AuthGate> {
   Future<(Perfil?, List<Map<String, dynamic>>)> _preparar() async {
     var perfil = await Perfil.actual();
     if (perfil == null) return (null, <Map<String, dynamic>>[]);
+    _cambiarPin = await debeCambiarPin();
+    if (_cambiarPin) return (perfil, <Map<String, dynamic>>[]);
     // La empresa de este equipo manda, si el usuario pertenece a ella
     final disp = await EmpresaDispositivo.leer();
     if (disp != null && perfil.empresaId != disp) {
@@ -76,6 +80,7 @@ class _AuthGateState extends State<AuthGate> {
               if (snap.hasError) return _Aviso('No se pudo cargar tu perfil:\n${snap.error}');
               final (perfil, empresas) = snap.data!;
               if (perfil == null) return const _Aviso('No se encontró tu perfil.');
+              if (_cambiarPin) return const CambiarPinPage();
               if (perfil.empresaId == null || !perfil.activo) {
                 return empresas.isEmpty
                     ? const _Aviso('Tu cuenta no tiene acceso a ninguna empresa.\nPide al administrador que te dé acceso.')

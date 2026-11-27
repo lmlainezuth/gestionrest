@@ -32,6 +32,8 @@ class _SeguridadPageState extends State<SeguridadPage> {
     'anulacion_denegada': 'Intentó anular una factura sin ser administrador',
     'usuario_ajeno': 'Intentó cambiar el PIN de un usuario de otro bar',
     'pin_otro_bar': 'No pudo cambiar el PIN de un empleado que también está en otro bar',
+    'pin_bloqueado_bar': 'Entrada con PIN bloqueada 15 minutos en todo el bar (20 PIN incorrectos)',
+    'pin_cambiado': 'Cambió su PIN',
   };
 
   @override

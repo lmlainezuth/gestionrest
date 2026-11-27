@@ -97,6 +97,11 @@ class FichajeService {
 
   static String _mensaje(Object e) => e is PostgrestException ? e.message : '$e';
 
+  /// Bloqueo temporal por PIN incorrectos (del empleado, del bar o general): hay que esperar,
+  /// no es un rechazo. La base lo marca con el código PT429 (migración 0048).
+  static bool esBloqueo(Object e) =>
+      e is PostgrestException && (e.code == 'PT429' || e.message.startsWith('Demasiados PIN incorrectos'));
+
   static Future<Map<String, dynamic>> estado(String empresa, String usuario, String pin) async {
     final r = Map<String, dynamic>.from(await supabase
         .rpc('fichaje_estado', params: {'p_empresa': empresa, 'p_usuario': usuario, 'p_pin': pin}) as Map);
@@ -136,7 +141,8 @@ class FichajeService {
     return List<Map<String, dynamic>>.from((jsonDecode(s) as List).map((e) => Map<String, dynamic>.from(e as Map)));
   }
 
-  /// Sube en orden lo guardado sin internet. Lo que el servidor rechaza no se reintenta.
+  /// Sube en orden lo guardado sin internet. Lo que el servidor rechaza no se reintenta; un
+  /// bloqueo por PIN incorrectos no es un rechazo: se deja en la cola y se reintenta más tarde.
   static Future<void> subir() async {
     if (_subiendo || !Conexion.enLinea.value) return;
     _subiendo = true;
@@ -149,6 +155,10 @@ class FichajeService {
           if (r['error'] != null) ultimoError = 'Fichaje sin internet rechazado: ${r['error']}';
         } catch (e) {
           if (esErrorDeRed(e)) break;
+          if (esBloqueo(e)) {
+            ultimoError = 'Fichajes sin internet en espera: ${_mensaje(e)}';
+            break;
+          }
           ultimoError = 'Fichaje sin internet rechazado: ${_mensaje(e)}';
         }
         cola = cola.sublist(1);

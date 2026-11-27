@@ -29,6 +29,8 @@ class _PlataformaTabState extends State<PlataformaTab> {
     'anulacion_denegada': 'Anulación intentada sin ser administrador',
     'usuario_ajeno': 'PIN de un usuario de otro bar',
     'pin_otro_bar': 'PIN de un empleado que está en otro bar',
+    'pin_bloqueado_bar': 'Entrada con PIN bloqueada en todo el bar',
+    'pin_cambiado': 'Cambio de PIN',
   };
 
   @override

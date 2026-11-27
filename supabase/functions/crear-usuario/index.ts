@@ -1,5 +1,6 @@
 // GestiónRest · alta de usuarios con nombre + PIN, y cambio de PIN.
-// Solo administradores. Corre en el servidor (usa la clave de servicio).
+// Alta y cambio de PIN de otros: solo administradores. Cambiar el PIN propio ("mi_pin"): cualquier
+// cuenta de PIN, dando el PIN actual. Corre en el servidor (usa la clave de servicio).
 import { createClient } from "npm:@supabase/supabase-js@2.50.3";
 
 const cors = {
@@ -32,21 +33,50 @@ Deno.serve(async (req) => {
   const jwt = (req.headers.get("Authorization") ?? "").replace("Bearer ", "");
   const { data: { user } } = await admin.auth.getUser(jwt);
   if (!user) return json({ error: "No has iniciado sesión" }, 401);
+  const b = await req.json();
+  const pin = String(b.pin ?? "");
+  // Mínimo 6 cifras para todos (migración 0048): con menos, un PIN se adivina probando
+  const pinValido = /^\d{6,8}$/.test(pin);
+  const avisoPin = "El PIN debe tener entre 6 y 8 cifras";
+
+  // Cambiar el PIN propio: la app lo pide al entrar si el PIN es corto. Hace falta el PIN actual.
+  if (b.accion === "mi_pin") {
+    if (!pinValido) return json({ error: avisoPin }, 400);
+    const { data: p } = await admin.from("perfiles").select("correo, empresa_actual").eq("id", user.id).single();
+    if (!p?.correo?.endsWith("@gestionrest.local")) {
+      return json({ error: "Tu cuenta entra con correo y contraseña: cámbiala desde ahí" }, 403);
+    }
+    const actual = String(b.actual ?? "");
+    if (actual === pin) return json({ error: "El PIN nuevo tiene que ser distinto del actual" }, 400);
+    const prueba = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { error: errActual } = await prueba.auth.signInWithPassword({
+      email: p.correo,
+      password: claveDePin(actual, p.correo),
+    });
+    if (errActual) return json({ error: "El PIN actual no es correcto" }, 403);
+    await prueba.auth.signOut().catch(() => {});
+    const { error } = await admin.auth.admin.updateUserById(user.id, { password: claveDePin(pin, p.correo) });
+    if (error) return json({ error: error.message }, 400);
+    const { error: errSeguro } = await admin.from("perfiles").update({ pin_seguro: true }).eq("id", user.id);
+    if (errSeguro) return json({ error: errSeguro.message }, 400);
+    if (p.empresa_actual) await apuntarEvento(String(p.empresa_actual), "pin_cambiado", user.id, "Cambió su propio PIN");
+    return json({ ok: true });
+  }
+
   // Debe ser administrador de su empresa actual
-  const { data: perfil } = await admin.from("perfiles").select("empresa_actual").eq("id", user.id).single();
+  const { data: perfil } = await admin.from("perfiles").select("empresa_actual, correo, pin_seguro").eq("id", user.id).single();
   const empresa = perfil?.empresa_actual;
   const { data: yo } = await admin.from("empresa_usuarios").select("rol, activo")
     .eq("empresa_id", empresa).eq("usuario_id", user.id).maybeSingle();
   if (!empresa || yo?.rol !== "admin" || !yo.activo) return json({ error: "Solo el administrador puede hacer esto" }, 403);
+  // Como en la base (0048): con un PIN corto no se gestiona a nadie hasta cambiarlo
+  if (perfil?.correo?.endsWith("@gestionrest.local") && !perfil.pin_seguro) {
+    return json({ error: "Cambia antes tu PIN por uno de 6 cifras" }, 403);
+  }
 
-  const b = await req.json();
-  const pin = String(b.pin ?? "");
-  // Mínimo 4 cifras para todos: con menos, un PIN se adivina probando
-  if (!/^\d{4,8}$/.test(pin)) return json({ error: "El PIN debe tener entre 4 y 8 cifras" }, 400);
-  // Un administrador lo puede todo en su bar: su PIN no puede ser de los que se adivinan probando
-  const PIN_ADMIN = 6;
-  const pinCorto = (rol: string) => rol === "admin" && pin.length < PIN_ADMIN;
-  const avisoPinCorto = `El PIN de un administrador debe tener al menos ${PIN_ADMIN} cifras`;
+  if (!pinValido) return json({ error: avisoPin }, 400);
 
   // Cambiar el PIN de un usuario existente
   if (b.accion === "pin") {
@@ -72,13 +102,13 @@ Deno.serve(async (req) => {
         return json({ error: "Este usuario también está en otro bar: solo él puede cambiar su PIN" }, 403);
       }
     }
-    if (pinCorto(miembro.rol)) return json({ error: avisoPinCorto }, 400);
     const { error } = await admin.auth.admin.updateUserById(String(b.id), {
       password: claveDePin(pin, p.correo),
     });
     if (error) return json({ error: error.message }, 400);
-    // Para pasar a administrador hace falta un PIN largo (lo comprueba la base, migración 0041)
-    await admin.from("perfiles").update({ pin_seguro: pin.length >= PIN_ADMIN }).eq("id", String(b.id));
+    // PIN de 6 cifras o más: la base le devuelve el rol (migraciones 0041 y 0048)
+    const { error: errSeguro } = await admin.from("perfiles").update({ pin_seguro: true }).eq("id", String(b.id));
+    if (errSeguro) return json({ error: errSeguro.message }, 400);
     return json({ ok: true });
   }
 
@@ -87,7 +117,6 @@ Deno.serve(async (req) => {
   const rol = String(b.rol ?? "");
   if (!nombre) return json({ error: "Escribe el nombre" }, 400);
   if (!["admin", "camarero", "cocinero"].includes(rol)) return json({ error: "Rol no válido" }, 400);
-  if (pinCorto(rol)) return json({ error: avisoPinCorto }, 400);
 
   const correo = `u${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}@gestionrest.local`;
   const { data, error } = await admin.auth.admin.createUser({
@@ -100,7 +129,7 @@ Deno.serve(async (req) => {
 
   // Si falla cualquier paso se borra el usuario: nunca queda uno a medias (sin empresa)
   const { error: e1 } = await admin.from("perfiles")
-    .update({ nombre, empresa_actual: empresa, pin_seguro: pin.length >= PIN_ADMIN }).eq("id", data.user.id);
+    .update({ nombre, empresa_actual: empresa, pin_seguro: true }).eq("id", data.user.id);
   const { error: e2 } = e1 ? { error: null } :
     await admin.from("empresa_usuarios").insert({ empresa_id: empresa, usuario_id: data.user.id, rol, activo: true });
   if (e1 || e2) {

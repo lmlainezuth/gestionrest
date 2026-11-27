@@ -18,6 +18,8 @@ const NOMBRES: Record<string, string> = {
   anulacion_denegada: "anulaciones de factura intentadas sin ser administrador",
   usuario_ajeno: "intentos de cambiar el PIN de un usuario de otro bar",
   pin_otro_bar: "PIN que no se pudieron cambiar (usuario en otro bar)",
+  pin_bloqueado_bar: "bloqueos de la entrada con PIN en todo el bar",
+  pin_cambiado: "cambios de PIN",
 };
 
 Deno.serve(async (req) => {
