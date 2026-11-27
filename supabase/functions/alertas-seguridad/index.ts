@@ -18,15 +18,20 @@ async function secretoIgual(dado: string | null, esperado: string | undefined): 
   return d === 0;
 }
 
-// Llamada del cron con la cabecera x-copia-secreto: "ok" si el secreto coincide, el motivo si no
-// (sin enseñar el secreto), null si no trae la cabecera. Sin espacios ni saltos de línea de más.
-async function secretoCron(req: Request, nombre: string): Promise<"ok" | string | null> {
-  const dado = req.headers.get("x-copia-secreto")?.trim();
+// Llamada del cron: el secreto llega en la cabecera x-copia-secreto o, si algo la quita por el
+// camino, en "secreto" dentro del cuerpo JSON. "ok" si coincide, el motivo si no (sin enseñar el
+// secreto), null si no viene de ninguna forma. Sin espacios ni saltos de línea de más.
+async function secretoCron(req: Request, nombre: string, cuerpo: unknown): Promise<"ok" | string | null> {
+  const enCuerpo = (cuerpo as { secreto?: unknown } | null)?.secreto;
+  const dado = (req.headers.get("x-copia-secreto") ?? (typeof enCuerpo === "string" ? enCuerpo : ""))?.trim();
   if (!dado) return null;
   const esperado = Deno.env.get(nombre)?.trim();
   if (!esperado) return `No autorizado: falta ${nombre} en el servidor`;
   return (await secretoIgual(dado, esperado)) ? "ok" : "No autorizado: el secreto no coincide";
 }
+
+// Para el mensaje de error: qué cabeceras llegaron (solo los nombres, nunca los valores)
+const cabecerasRecibidas = (req: Request) => [...req.headers.keys()].sort().join(", ");
 
 // CORS: el botón Test del panel de Supabase llama desde el navegador, que antes pregunta con OPTIONS
 const cors = {
@@ -60,9 +65,15 @@ const NOMBRES: Record<string, string> = {
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
-  const cron = await secretoCron(req, "ALERTAS_SECRETO");
-  if (cron !== "ok") return json({ error: cron ?? "No autorizado: no llega la cabecera x-copia-secreto" }, 403);
-  const siempre = (await req.json().catch(() => ({})))?.siempre === true;
+  const cuerpo = await req.json().catch(() => ({}));
+  const cron = await secretoCron(req, "ALERTAS_SECRETO", cuerpo);
+  if (cron !== "ok") {
+    return json({
+      error: cron ?? "No autorizado: no llega el secreto (ni en la cabecera x-copia-secreto ni en \"secreto\" del cuerpo)",
+      cabeceras_recibidas: cabecerasRecibidas(req),
+    }, 403);
+  }
+  const siempre = cuerpo?.siempre === true;
 
   const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
   const desde = new Date(Date.now() - 24 * 3600 * 1000).toISOString();

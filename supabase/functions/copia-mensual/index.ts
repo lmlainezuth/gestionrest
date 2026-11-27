@@ -31,15 +31,20 @@ async function secretoIgual(dado: string | null, esperado: string | undefined): 
   return d === 0;
 }
 
-// Llamada del cron con la cabecera x-copia-secreto: "ok" si el secreto coincide, el motivo si no
-// (sin enseñar el secreto), null si no trae la cabecera. Sin espacios ni saltos de línea de más.
-async function secretoCron(req: Request, nombre: string): Promise<"ok" | string | null> {
-  const dado = req.headers.get("x-copia-secreto")?.trim();
+// Llamada del cron: el secreto llega en la cabecera x-copia-secreto o, si algo la quita por el
+// camino, en "secreto" dentro del cuerpo JSON. "ok" si coincide, el motivo si no (sin enseñar el
+// secreto), null si no viene de ninguna forma. Sin espacios ni saltos de línea de más.
+async function secretoCron(req: Request, nombre: string, cuerpo: unknown): Promise<"ok" | string | null> {
+  const enCuerpo = (cuerpo as { secreto?: unknown } | null)?.secreto;
+  const dado = (req.headers.get("x-copia-secreto") ?? (typeof enCuerpo === "string" ? enCuerpo : ""))?.trim();
   if (!dado) return null;
   const esperado = Deno.env.get(nombre)?.trim();
   if (!esperado) return `No autorizado: falta ${nombre} en el servidor`;
   return (await secretoIgual(dado, esperado)) ? "ok" : "No autorizado: el secreto no coincide";
 }
+
+// Para el mensaje de error: qué cabeceras llegaron (solo los nombres, nunca los valores)
+const cabecerasRecibidas = (req: Request) => [...req.headers.keys()].sort().join(", ");
 
 const json = (cuerpo: unknown, estado = 200) =>
   new Response(JSON.stringify(cuerpo), { status: estado, headers: { ...cors, "Content-Type": "application/json" } });
@@ -333,7 +338,7 @@ Deno.serve(async (req) => {
   // ¿Quién llama? pg_cron (secreto) → todas; administrador → la suya
   let empresas: { id: string; nombre: string }[];
   // Con la cabecera del cron, el secreto tiene que coincidir; sin ella, es el administrador desde la app
-  const cron = await secretoCron(req, "COPIA_SECRETO");
+  const cron = await secretoCron(req, "COPIA_SECRETO", cuerpo);
   if (cron && cron !== "ok") return json({ error: cron }, 403);
   const automatica = cron === "ok";
   if (automatica) {
