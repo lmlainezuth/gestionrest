@@ -177,7 +177,7 @@ class _PanelHoyPageState extends State<PanelHoyPage> {
       final caducado = c.caduca.isBefore(ahora);
       final equipo = c.origen.replaceFirst('equipo', '').trim();
       final donde = c.origen == 'servidor'
-          ? 'el del servidor (tablets): súbelo de nuevo a Supabase (TBAI_P12_…)'
+          ? 'el del servidor (tablets): el programador sube el nuevo en Ajustes › Programa › Estado de los bares'
           : 'el del ${equipo.isEmpty ? 'TPV' : 'equipo $equipo'}: instálalo en Ajustes › Empresa';
       _avisos.add((
         icono: Icons.key_off_outlined,

@@ -130,6 +130,29 @@ Para provocar los rechazos hay que tocar la cola del equipo (ver Preparación). 
 | 5.9 | Lanza `alertas-seguridad` con `{"siempre":true}` y el secreto **nuevo** `ALERTAS_SECRETO` | Llega el correo. Con el secreto viejo (`COPIA_SECRETO`): 403 |
 | 5.10 | **(SQL)** Crea una función de prueba `create function public.prueba_x() returns int language sql as 'select 1';` y mira `select has_function_privilege('anon', 'public.prueba_x()', 'execute');`. Bórrala después (`drop function public.prueba_x();`) | `false`: las funciones nuevas ya no quedan abiertas a anon |
 
+## Alta de bares (0054)
+
+Antes: la `0054` en el SQL Editor, el secreto `TBAI_CLAVE_MAESTRA` creado y las funciones `alta-bar` y
+`ticketbai` desplegadas (ver «Lo que tienes que ejecutar», en PRODUCCION.md). Todo como programador
+(cuenta de correo), en Ajustes › Programa.
+
+| # | Qué hacer | Qué tiene que pasar |
+|---|---|---|
+| A.1 | Estado de los bares › el bar de pruebas | Sale «En los secretos del panel (antiguo)» con su titular y su caducidad. En «Para pasar a producción», «El certificado no está en el almacén» en rojo |
+| A.2 | Comprobar el certificado del bar de pruebas (Ajustes › Empresa › Comprobar certificado) **antes** de A.3 | Sigue funcionando con el secreto antiguo |
+| A.3 | «Pasar al almacén» | «Certificado en el almacén. Ya está en el almacén: borra los secretos…». El certificado sale «subido el» hoy. **(SQL)** `select empresa_id, nif, titular, caduca, left(cifrado, 20) from tbai_certificados_guardados;` → una fila con el cifrado ilegible |
+| A.4 | Cobra un ticket en una tablet (firma el servidor) y mira que llega a Hacienda de pruebas | Firmado y enviado como siempre, ahora con el certificado del almacén. Después ya puedes borrar `TBAI_P12_<ID>` y `TBAI_P12_CLAVE_<ID>` y repetir: sigue funcionando |
+| A.5 | «Sustituir por uno nuevo» con la contraseña mal | «La contraseña no abre el certificado» |
+| A.6 | «Sustituir por uno nuevo» con un certificado de otra persona (o el autofirmado `test/fixtures/prueba_tbai.p12`, contraseña 1234) | «El certificado es de «…», no del NIF del bar (…)» |
+| A.7 | «Sustituir por uno nuevo» con el mismo certificado bueno | Guardado. **(SQL)** `select titular, caduca, sustituido_en from tbai_certificados_historial;` → el anterior, sin cifrado |
+| A.8 | Alta de bar: paso 1 con NIF `12345678A` | «NIF no válido». Con `B00000000`: «Ese es el NIF de relleno» |
+| A.9 | Alta de bar completa, con un **titular de pruebas cuyo certificado tengas** (puede ser el mismo del bar de pruebas: el NIF puede repetirse en otro bar) | Al final, la serie de la caja (distinta de las del otro bar con ese NIF). En Estado de los bares aparece en «Pruebas de Hacienda», certificado en el almacén |
+| A.10 | En un equipo: entra con tu correo, elige el bar nuevo, sal | En la pantalla de entrada sale el administrador nuevo y entra con su PIN de 6 cifras, sin que le pida cambiarlo |
+| A.11 | Como administrador del bar (no programador): Ajustes › Empresa | El entorno solo ofrece Simulado y Pruebas. Ajustes › Programa no aparece |
+| A.12 | Estado del bar nuevo › «Pasar a producción» | «Todavía no se puede» con lo que falta (por ejemplo la licencia definitiva). **No lo pases a producción con datos de prueba**: el de verdad se hace con el bar real |
+| A.13 | Panel Seguridad del bar nuevo y aviso diario del día siguiente (o `alertas-seguridad` con `{"siempre":true}`) | «Alta del bar», «Certificado del titular subido…» y, si probaste A.12 por la API, «Intento de pasar a producción que no se hizo» |
+| A.14 | Quita del bar nuevo los usuarios de prueba cuando acabes | — |
+
 ---
 
 # Parte 2 · Pruebas por API (script)
@@ -173,6 +196,20 @@ de variables de entorno o lo pregunta al empezar. Necesita Node 18 o más.
   - PIN de alguien que no es del bar: misma respuesta que un PIN incorrecto.
   - La app no puede llamar a `reclamar_accion_manual` ni a `alertas_resumen`.
   - Fotos: ni HTML ni más de 2 MB.
+- **Alta de bares (0054):**
+  - Camarero y administrador con PIN: `alta-bar` 403.
+  - El administrador no lee el almacén ni el historial de certificados; la app no puede llamar a
+    `alta_bar_crear`, `pasar_produccion`, `guardar_certificado_bar` ni `alta_bar_comprobaciones`.
+  - Renovar la serie de un equipo con el bar en pruebas: rechazado.
+  - Con `GR_PROGRAMADOR_EMAIL`: lista de bares; estado con 8 comprobaciones y sin el certificado;
+    un fichero que no es certificado, rechazado; alta con NIF no válido o PIN de 4 cifras, rechazada
+    sin crear nada; pasar a producción con el nombre mal escrito, rechazado y el entorno igual
+    (queda apuntado como «intento de pasar a producción» en Seguridad).
+  - Con `GR_CERT` y `GR_CERT_CLAVE` (el .p12 del titular del bar de pruebas): contraseña mal,
+    otro NIF y el bueno.
+- **Con `--entorno`:** el administrador intenta pasar el bar a producción por la API → rechazado. Si la
+  `0054` no estuviera aplicada pasaría: el script lo vuelve a dejar como estaba en el acto y lo marca
+  como fallo. **Lánzalo solo con «0054_alta_bar» en verde en `comprobar_migraciones.sql`.**
 - **Con `--esperas`:** resumen y copia manuales dos veces seguidas (la segunda, 429) y dos resúmenes a
   la vez (solo pasa uno). **Manda un correo de resumen y hace una copia en Drive**.
 - **Con `--bloqueos`:** 20 PIN falsos a la vez a la «víctima» → solo se prueban 5; después sigue bloqueado.
@@ -193,7 +230,11 @@ $env:GR_PUENTE_URL = 'https://<sitio>.netlify.app/api/tbai'   # opcional
 $env:GR_COCINERO_ID = '<id del cocinero>'             # opcional
 $env:GR_VICTIMA_ID = '<id del empleado que se puede bloquear>'  # para --bloqueos
 $env:GR_OTRO_ADMIN_ID = '<id de otro administrador>'  # opcional
+$env:GR_PROGRAMADOR_EMAIL = '<tu correo de programador>'  # alta de bares (la contraseña la pregunta)
+$env:GR_CERT = 'C:\ruta\certificado-del-titular.pfx'    # opcional
+$env:GR_CERT_CLAVE = '<su contraseña>'                    # opcional
 node herramientas/pruebas_api.mjs
+node herramientas/pruebas_api.mjs --entorno          # solo con la 0054 aplicada
 node herramientas/pruebas_api.mjs --bloqueos
 node herramientas/pruebas_api.mjs --esperas          # manda un resumen y hace una copia
 node herramientas/pruebas_api.mjs --bloqueo-bar      # al final: 15 minutos sin PIN en el bar

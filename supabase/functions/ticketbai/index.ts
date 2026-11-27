@@ -1,10 +1,11 @@
 // Edge Function "ticketbai": guarda, firma (XAdES-EPES) y prepara el envío a la Hacienda Foral de
 // Gipuzkoa. Desde la migración 0050 solo se firma y se envía lo que esta función guarda.
 //
-// Secretos necesarios (Supabase → Edge Functions → Secrets), UNO POR EMPRESA
-// (<ID> = id de la empresa sin guiones, en mayúsculas; "Comprobar certificado" lo muestra):
-//   TBAI_P12_<ID>        certificado .p12/.pfx en base64 del titular de esa empresa
-//   TBAI_P12_CLAVE_<ID>  contraseña del certificado
+// Certificado de cada empresa: el que se sube desde la app (Ajustes › Programa), guardado cifrado
+// en la base (migración 0054, ver ../_shared/certificado.ts). Mientras una empresa no lo haya
+// pasado al almacén, el secreto antiguo TBAI_P12_<ID> / TBAI_P12_CLAVE_<ID>.
+// Secretos necesarios (Supabase → Edge Functions → Secrets):
+//   TBAI_CLAVE_MAESTRA   llave del almacén de certificados (32 bytes en base64)
 //   PUENTE_SECRETO       el mismo que en Netlify (preparar_envio y resultado_envio)
 // El certificado tiene que ser del NIF de la empresa: si no coincide, no se firma.
 //
@@ -24,6 +25,7 @@ import forge from 'npm:node-forge@1.4.3';
 import * as xadesjs from 'npm:xadesjs@3.0.0';
 import * as xmlcore from 'npm:xml-core@3.0.0';
 import { DOMImplementation, DOMParser, XMLSerializer } from 'npm:@xmldom/xmldom@0.9.12';
+import { certificadoDelBar, certificadoDelNif, titularDe } from '../_shared/certificado.ts';
 
 xadesjs.Application.setEngine('webcrypto', crypto);
 xmlcore.setNodeDependencies({ DOMParser, XMLSerializer, DOMImplementation });
@@ -74,9 +76,6 @@ async function leerCertificado(p12Base64: string, clave: string): Promise<Certif
     caduca: cert.validity.notAfter.toISOString(),
   };
 }
-
-const titularDe = (cert: forge.pki.Certificate) =>
-  cert.subject.attributes.map((a) => `${a.shortName ?? a.name}=${a.value}`).join(', ');
 
 async function firmar(xmlSinFirma: string, cert: Certificado) {
   const doc = new DOMParser().parseFromString(xmlSinFirma, 'application/xml');
@@ -135,18 +134,6 @@ function estadoDeRespuesta(http: number | null, texto: string | null, error: str
     .some((t) => t != null && /ya (ha sido |fue )?recibid|duplicad/i.test(t));
   const estado = r.estado === '00' || (r.estado === '01' && yaRecibido) ? 'enviada' : r.estado === '01' ? 'error' : 'pendiente';
   return { estado, respuesta };
-}
-
-// ¿Es el certificado de este NIF? Misma regla que la app (lib/features/ticketbai/titular_nif.dart).
-// Con identificador de entidad (VATES-…, el titular en los certificados de representante) tiene que
-// ser ese: no vale el DNI del representante que también va en el sujeto. Sin él, el NIF tiene que
-// aparecer como palabra suelta, no como trozo de otra.
-function certificadoDelNif(titular: string, nif: string): boolean {
-  const t = titular.toUpperCase();
-  if (!/^[A-Z0-9]{9}$/.test(nif)) return false;
-  const entidad = new Set([...t.matchAll(/VATES-?([A-Z0-9]{9})/g)].map((m) => m[1]));
-  if (entidad.size > 0) return entidad.has(nif);
-  return new RegExp(`(^|[^A-Z0-9])${nif}([^A-Z0-9]|$)`).test(t);
 }
 
 // Solo un fichero TicketBAI de ESTE titular: raíz conocida y NIF del emisor igual al de la empresa.
@@ -415,14 +402,16 @@ Deno.serve(async (req) => {
     }
 
     // Certificado de ESTA empresa (cada bar puede tener un titular distinto), solo si hace falta
-    const id = String(config.empresa_id).replaceAll('-', '').toUpperCase();
-    const nombreSecreto = `TBAI_P12_${id}`;
-    const p12 = Deno.env.get(nombreSecreto);
-    const clave = Deno.env.get(`TBAI_P12_CLAVE_${id}`) ?? '';
+    let guardado: Awaited<ReturnType<typeof certificadoDelBar>> | undefined;
+    const delBar = async () => {
+      guardado ??= await certificadoDelBar(srv, String(config.empresa_id));
+      if (!guardado) throw new Rechazo('Falta el certificado de esta empresa: el programador lo sube en Ajustes › Programa › Estado de los bares');
+      return guardado;
+    };
     let certificado: Certificado | null = null;
     const cert = async () => {
-      if (!p12) throw new Rechazo(`Falta el certificado de esta empresa: crea los secretos ${nombreSecreto} y TBAI_P12_CLAVE_${id}`);
-      return certificado ??= await leerCertificado(p12, clave);
+      const g = await delBar();
+      return certificado ??= await leerCertificado(g.p12, g.clave);
     };
     const cx: Contexto = { srv, supa, usuario: usuario.user.id, rol: String(rol), config: { ...config, nif }, cert };
     const cuerpo = await req.json();
@@ -438,7 +427,7 @@ Deno.serve(async (req) => {
         empresa_id: config.empresa_id, origen: 'servidor', titular: c.titular, caduca: c.caduca,
         actualizado_en: new Date().toISOString(),
       }, { onConflict: 'empresa_id,origen' });
-      return json({ ok: true, titular: c.titular, caduca: c.caduca, entorno: config.entorno, secreto: nombreSecreto });
+      return json({ ok: true, titular: c.titular, caduca: c.caduca, entorno: config.entorno, origen: (await delBar()).origen });
     }
 
     if (cuerpo.accion === 'registrar') {
@@ -587,7 +576,8 @@ Deno.serve(async (req) => {
         const raiz = { alta: 'TicketBai', baja: 'AnulaTicketBai', 'zuzendu-alta': 'SubsanacionModificacionTicketBAI' }[servicio]!;
         const mal = comprobarXml(fila.xml, nif, [raiz]);
         if (mal) return json({ error: mal }, 400);
-        return json({ p12, clave, entorno: config.entorno, nif, xml: fila.xml, servicio });
+        const g = await delBar();
+        return json({ p12: g.p12, clave: g.clave, entorno: config.entorno, nif, xml: fila.xml, servicio });
       }
 
       // resultado_envio: el estado lo escribe el servidor con lo que respondió Hacienda

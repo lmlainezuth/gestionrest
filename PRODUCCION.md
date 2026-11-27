@@ -125,12 +125,9 @@ select created, status_code, content from net._http_response order by created de
    administrador). Las facturas de prueba no se borran (son del entorno `pruebas`).
 6. **Carteles QR** de las mesas: retirarlos. **Fotos antiguas** (última consulta de 0.2): volver a subirlas.
 7. **Revisión de la 0050:** la consulta comentada al final; si devuelve filas, revisarlas.
-8. **Pasar cada bar a `produccion`** (el paso fiscal), cuando toque:
-   - licencia TicketBAI definitiva y NIF del desarrollador en Ajustes › Empresa;
-   - certificado del bar en `TBAI_P12_<ID>` y `TBAI_P12_CLAVE_<ID>`;
-   - `update tbai_config set entorno = 'produccion' where empresa_id = '<bar>';`
-   - en cada equipo con serie propia: Ajustes › Empresa → serie nueva (las de `pruebas` dejan de valer y no se
-     mezclan con las reales).
+8. **Pasar cada bar a `produccion`** (el paso fiscal), cuando toque: desde la `0054` se hace en la app,
+   Ajustes › Programa › Estado de los bares › «Pasar a producción» (ver el apartado de abajo). Ya no con
+   `update tbai_config`: la base lo rechaza desde la app y de producción no se vuelve.
 9. **Git:** unir `seguridad-auditoria` con `main` cuando todo esté comprobado.
 10. **Memoria de TicketBAI:** actualizar el proceso (arquitectura, firma, registro, envío, anulaciones,
     custodia del certificado) y añadir el apartado de contingencia (ventas en espera).
@@ -160,3 +157,42 @@ $c$);
 Para probar el aviso al momento: la misma llamada con `{"siempre": true, "secreto": "…"}` (llega el correo aunque
 no haya nada). En el botón Test del panel, o la cabecera se llama `x-copia-secreto` (no `ALERTAS_SECRETO`), o la
 contraseña va en el cuerpo como `"secreto"`.
+
+## Alta de bares desde la app (migración 0054)
+
+Lo que tienes que ejecutar, **en este orden** (la `0054` antes que `ticketbai`: la función nueva lee una
+tabla que crea la migración).
+
+1. **Llave del almacén de certificados.** En PowerShell, genera 32 bytes al azar:
+
+   ```powershell
+   $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b)
+   ```
+
+   Guarda el resultado en tu gestor de contraseñas. **Si se pierde, los certificados guardados no se pueden
+   abrir** y hay que volver a subirlos todos. Después:
+
+   ```
+   supabase secrets set TBAI_CLAVE_MAESTRA=<el valor> --project-ref zouujjameuyyedqiotxt
+   ```
+
+2. **SQL Editor:** ejecuta entera `supabase/migrations/0054_alta_bar.sql`. Luego
+   `supabase/datos/comprobar_migraciones.sql` → «✔ Están todas».
+3. **Funciones:**
+
+   ```
+   supabase functions deploy alta-bar --project-ref zouujjameuyyedqiotxt
+   supabase functions deploy ticketbai --project-ref zouujjameuyyedqiotxt
+   supabase functions deploy alertas-seguridad --no-verify-jwt --project-ref zouujjameuyyedqiotxt
+   ```
+
+   `alta-bar` y `ticketbai` llevan la carpeta `_shared`: el CLI la incluye solo.
+4. **App nueva** en tu equipo de programador y, después, en los equipos de los bares (la renovación
+   automática de series y el cambio en Ajustes › Empresa van en la app).
+5. **Pruebas:** `PRUEBAS.md` › «Alta de bares (0054)» y el script con `GR_PROGRAMADOR_EMAIL`.
+6. **Bar actual:** Estado de los bares › «Pasar al almacén». Cobra un ticket en una tablet y comprueba que
+   llega a Hacienda. Entonces borra `TBAI_P12_<ID>` y `TBAI_P12_CLAVE_<ID>` del panel y repite la prueba.
+7. **Producción de un bar**, cuando toque: licencia definitiva y datos del desarrollador en Ajustes ›
+   Programa, y luego Estado de los bares › «Pasar a producción». Los equipos con serie propia piden la suya
+   solos al subir lo que tenían pendiente; si alguno no puede, el administrador se la asigna en Ajustes ›
+   Empresa.

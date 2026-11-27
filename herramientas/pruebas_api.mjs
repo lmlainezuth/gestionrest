@@ -7,6 +7,8 @@
 //   node herramientas/pruebas_api.mjs --bloqueo-bar    además, bloqueo de todo el bar (15 minutos sin PIN)
 //   node herramientas/pruebas_api.mjs --esperas        además, resumen y copia manuales dos veces seguidas
 //                                                      (manda un correo de resumen y hace una copia en Drive)
+//   node herramientas/pruebas_api.mjs --entorno        además, intentar pasar el bar a producción desde la app
+//                                                      (solo con la 0054 ya aplicada: ver PRUEBAS.md)
 //
 // Variables (las * son obligatorias):
 //   GR_URL*            dirección del proyecto Supabase de pruebas (https://xxxx.supabase.co)
@@ -22,7 +24,11 @@
 //   GR_COCINERO_ID / GR_COCINERO_PIN   un cocinero de pruebas (opcional)
 //   GR_VICTIMA_ID      un empleado de pruebas que se puede bloquear (para --bloqueos)
 //   GR_OTRO_ADMIN_ID   otro administrador del bar (para probar que no se cambia su PIN)
+//   GR_PROGRAMADOR_EMAIL     tu cuenta de programador (pruebas del alta de bares) ...
+//   GR_PROGRAMADOR_PASSWORD  ... y su contraseña (si no está, se pregunta)
+//   GR_CERT / GR_CERT_CLAVE  un .p12/.pfx del titular del bar de pruebas y su contraseña (opcional)
 import readline from 'node:readline/promises';
+import { readFileSync } from 'node:fs';
 import { stdin, stdout } from 'node:process';
 
 const args = new Set(process.argv.slice(2));
@@ -379,6 +385,73 @@ if (args.has('--bloqueo-bar')) {
     await prueba('Bar bloqueado: el camarero tampoco entra con su PIN bueno', async () =>
       falla(await rpc('correo_pin', { p_empresa: EMPRESA, p_usuario: env.GR_CAMARERO_ID, p_pin: camPin }), 'en este bar'));
   }
+}
+
+// =====================================================================
+console.log('\n— Alta de bares (0054) —');
+await prueba('Camarero: alta-bar, 403', async () => falla(await funcion('alta-bar', { accion: 'bares' }, cam)));
+if (!env.GR_ADMIN_EMAIL) {
+  await prueba('Administrador con PIN: alta-bar, 403', async () => falla(await funcion('alta-bar', { accion: 'bares' }, adm)));
+}
+await prueba('Almacén de certificados: el administrador no lo lee', async () =>
+  denegado(await tabla('GET', 'tbai_certificados_guardados', '?select=empresa_id', undefined, adm)));
+await prueba('Historial de certificados: el administrador no lo lee', async () =>
+  denegado(await tabla('GET', 'tbai_certificados_historial', '?select=empresa_id', undefined, adm)));
+for (const fn of ['alta_bar_crear', 'pasar_produccion', 'guardar_certificado_bar', 'alta_bar_comprobaciones']) {
+  await prueba(`La app no puede llamar a ${fn}`, async () => denegado(await rpc(fn, { p_empresa: EMPRESA }, adm)));
+}
+await prueba('Renovar la serie de un equipo con el bar en pruebas: rechazado', async () =>
+  falla(await rpc('tbai_renovar_serie_equipo', { p_anterior: 'A1' }, cam), 'no está en producción'));
+if (args.has('--entorno')) {
+  await prueba('Pasar el bar a producción desde la app (administrador): rechazado', async () => {
+    const r = await tabla('PATCH', 'tbai_config', `?empresa_id=eq.${EMPRESA}`, { entorno: 'produccion' }, adm);
+    if (r.status < 400 && r.datos?.[0]?.entorno === 'produccion') {
+      // Sin la 0054 habría pasado: se deja como estaba en el acto
+      await tabla('PATCH', 'tbai_config', `?empresa_id=eq.${EMPRESA}`, { entorno }, adm);
+      return { ok: false, detalle: '¡PASÓ! Falta la 0054. Se ha vuelto a dejar en ' + entorno };
+    }
+    return falla(r, 'programador');
+  });
+}
+
+if (env.GR_PROGRAMADOR_EMAIL) {
+  const prog = await entrarConCorreo(env.GR_PROGRAMADOR_EMAIL,
+    env.GR_PROGRAMADOR_PASSWORD || await pedir('Contraseña del programador: '));
+  const nifBar = cfg.datos[0].nif;
+  await prueba('Programador: lista de bares (incluye el de pruebas)', async () => {
+    const r = await funcion('alta-bar', { accion: 'bares' }, prog);
+    return { ok: r.status === 200 && r.datos?.bares?.some((b) => b.id === EMPRESA), detalle: `${r.status} ${r.datos?.bares?.length ?? r.texto} bares` };
+  });
+  await prueba('Programador: estado del bar con sus comprobaciones (sin el certificado)', async () => {
+    const r = await funcion('alta-bar', { accion: 'estado', empresa_id: EMPRESA }, prog);
+    const c = r.datos?.comprobaciones;
+    return {
+      ok: r.status === 200 && Array.isArray(c) && c.length === 8 && !/cifrado|"p12"|"clave"/.test(r.texto),
+      detalle: `${r.status} · certificado: ${r.datos?.certificado?.origen ?? 'ninguno'} · en rojo: ${(c ?? []).filter((x) => !x.ok).length}`,
+    };
+  });
+  await prueba('Programador: un fichero que no es un certificado, rechazado con su motivo', async () =>
+    falla(await funcion('alta-bar', { accion: 'comprobar_certificado', nif: nifBar, p12: 'AAAA', clave: 'x' }, prog), 'no es un certificado'));
+  if (env.GR_CERT) {
+    const p12 = readFileSync(env.GR_CERT).toString('base64');
+    await prueba('Programador: contraseña equivocada, «La contraseña no abre el certificado»', async () =>
+      falla(await funcion('alta-bar', { accion: 'comprobar_certificado', nif: nifBar, p12, clave: 'no-es-esta-' + Date.now() }, prog), 'La contraseña no abre'));
+    await prueba('Programador: certificado de otro NIF, rechazado', async () =>
+      falla(await funcion('alta-bar', { accion: 'comprobar_certificado', nif: 'A58818501', p12, clave: env.GR_CERT_CLAVE ?? '' }, prog), 'no del NIF'));
+    await prueba('Programador: el certificado del bar se da por bueno (sin guardar nada)', async () => {
+      const r = await funcion('alta-bar', { accion: 'comprobar_certificado', nif: nifBar, p12, clave: env.GR_CERT_CLAVE ?? '' }, prog);
+      return { ok: r.status === 200 && r.datos?.ok === true && !('p12' in (r.datos ?? {})), detalle: `${r.status} ${r.texto.slice(0, 120)}` };
+    });
+  }
+  await prueba('Programador: alta con un NIF que no es válido, rechazada (no se crea nada)', async () =>
+    falla(await funcion('alta-bar', { accion: 'crear', nombre: 'PRUEBA', razon: 'PRUEBA', nif: '12345678A', admin_nombre: 'X', pin: '135790' }, prog), 'no es válido'));
+  await prueba('Programador: alta con un PIN de 4 cifras, rechazada (no se crea nada)', async () =>
+    falla(await funcion('alta-bar', { accion: 'crear', nombre: 'PRUEBA', razon: 'PRUEBA', nif: '12345678Z', admin_nombre: 'X', pin: '1234' }, prog), '6 y 8'));
+  await prueba('Programador: pasar a producción sin escribir bien el nombre, no cambia nada', async () => {
+    const r = await funcion('alta-bar', { accion: 'produccion', empresa_id: EMPRESA, confirmacion: 'NO ES EL NOMBRE' }, prog);
+    const ahora = (await tabla('GET', 'tbai_config', '?select=entorno&limit=1', undefined, adm)).datos?.[0]?.entorno;
+    return { ok: r.status === 400 && ahora === entorno, detalle: `${r.status} ${r.texto.slice(0, 120)} · entorno: ${ahora}` };
+  });
 }
 
 rl.close();

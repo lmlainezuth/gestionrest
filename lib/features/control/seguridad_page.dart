@@ -44,6 +44,10 @@ class _SeguridadPageState extends State<SeguridadPage> {
     'factura_forzada': 'Venta en espera enviada a Hacienda tal cual por el administrador',
     'usuario_creado': 'Alta de un usuario',
     'altas_limitadas': 'Demasiadas altas de usuarios seguidas (frenadas)',
+    'alta_bar': 'Alta del bar (programador)',
+    'certificado_subido': 'Certificado del titular subido o sustituido (programador)',
+    'paso_produccion': 'Paso a producción (programador)',
+    'produccion_denegada': 'Intento de pasar a producción que no se hizo (faltaba algo)',
   };
 
   @override

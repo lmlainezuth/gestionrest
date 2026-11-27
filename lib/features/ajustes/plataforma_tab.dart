@@ -41,6 +41,10 @@ class _PlataformaTabState extends State<PlataformaTab> {
     'factura_forzada': 'Factura forzada por el administrador',
     'usuario_creado': 'Alta de usuario',
     'altas_limitadas': 'Altas de usuarios frenadas',
+    'alta_bar': 'Alta de bar',
+    'certificado_subido': 'Certificado del titular subido o sustituido',
+    'paso_produccion': 'Paso a producción',
+    'produccion_denegada': 'Paso a producción denegado',
   };
 
   @override

@@ -4,6 +4,8 @@ import '../../core/red.dart';
 import '../../core/software.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
+import '../programa/alta_bar_page.dart';
+import '../programa/estado_bar_page.dart';
 
 /// Datos del programador y del software: iguales para todos los bares. Solo la ve el programador
 /// (tabla programadores, migración 0030). Cuando Hacienda inscriba el software, aquí se pone la
@@ -66,6 +68,27 @@ class _ProgramaTabState extends State<ProgramaTab> {
           child: Form(
             key: _form,
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Text('Bares', style: titulo(20)),
+              const SizedBox(height: 4),
+              const Text(
+                'Alta de un bar nuevo (en pruebas, con su certificado y su primer administrador), estado de cada '
+                'bar, cambio de certificado y paso a producción.',
+                style: TextStyle(color: C.gris, fontSize: 13),
+              ),
+              const SizedBox(height: 12),
+              Wrap(spacing: 10, runSpacing: 8, children: [
+                FilledButton.icon(
+                  onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AltaBarPage())),
+                  icon: const Icon(Icons.add_business_outlined),
+                  label: const Text('Alta de bar'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const EstadoBaresPage())),
+                  icon: const Icon(Icons.fact_check_outlined),
+                  label: const Text('Estado de los bares'),
+                ),
+              ]),
+              const SizedBox(height: 28),
               Text('Datos del programador', style: titulo(20)),
               const SizedBox(height: 4),
               const Text(

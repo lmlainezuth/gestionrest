@@ -12,7 +12,6 @@ import '../ticketbai/cadena_equipo.dart';
 import '../ticketbai/caducidad_certificados.dart';
 import '../../main.dart';
 import '../ticketbai/tbai_proveedor.dart' show probarCertificado;
-import '../ticketbai/facturacion_service.dart' show FacturacionService;
 import '../ticketbai/verificacion_presencial.dart';
 import '../../core/software.dart';
 
@@ -70,22 +69,12 @@ class _EmpresaTabState extends State<EmpresaTab> {
     if (!_form.currentState!.validate()) return;
     setState(() => _guardando = true);
     final nif = _nif.text.trim().toUpperCase();
-    // Titular nuevo o paso a producción: la caja recibe serie nueva (no se encadena con lo anterior)
-    // y la de este equipo hay que volver a asignarla
-    final serieNueva = nif != _tbai!['nif'] || (_entorno == 'produccion' && _tbai!['entorno'] != 'produccion');
+    // Titular nuevo: la caja recibe serie nueva (no se encadena con lo anterior) y la de este equipo
+    // hay que volver a asignarla. El paso a producción lo hace el programador (Estado de los bares).
+    final serieNueva = nif != _tbai!['nif'];
     try {
-      if (_entorno == 'produccion' && _tbai!['entorno'] != 'produccion') {
-        FacturacionService.comprobarConfig({
-          'entorno': 'produccion',
-          'nif': nif,
-        });
-      }
-      // Desde producción no se vuelve a pruebas/simulado: los tickets dejarían de llegar a Hacienda
-      if (_tbai!['entorno'] == 'produccion' && _entorno != 'produccion') {
-        throw 'El bar ya factura en producción: no se puede volver a pruebas ni a simulado';
-      }
       if (serieNueva && (await VentaOffline.cola()).isNotEmpty) {
-        throw 'Hay ventas sin internet pendientes de subir: espera a que se suban antes de cambiar el titular o pasar a producción';
+        throw 'Hay ventas sin internet pendientes de subir: espera a que se suban antes de cambiar el titular';
       }
       await supabase.from('empresa').update({
         'nombre': _nombre.text.trim(),
@@ -209,33 +198,19 @@ class _EmpresaTabState extends State<EmpresaTab> {
                 const SizedBox(height: 8),
                 Text('TicketBAI', style: titulo(20)),
                 const SizedBox(height: 12),
-                SegmentedButton<String>(
-                  segments: const [
-                    ButtonSegment(value: 'simulado', label: Text('Simulado')),
-                    ButtonSegment(value: 'pruebas', label: Text('Pruebas Hacienda')),
-                    ButtonSegment(value: 'produccion', label: Text('Producción')),
-                  ],
-                  selected: {_entorno},
-                  onSelectionChanged: (s) async {
-                    final v = s.first;
-                    if (v == 'produccion') {
-                      final ok = await showDialog<bool>(
-                        context: context,
-                        builder: (ctx) => AlertDialog(
-                          title: const Text('¿Pasar a producción?'),
-                          content: const Text('Las facturas se enviarán de verdad a la Hacienda Foral de Gipuzkoa y tendrán '
-                              'efectos fiscales. Necesitas la licencia TicketBAI definitiva del software.'),
-                          actions: [
-                            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
-                            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Sí, producción')),
-                          ],
-                        ),
-                      );
-                      if (ok != true) return;
-                    }
-                    setState(() => _entorno = v);
-                  },
-                ),
+                // A producción solo pasa el programador (Ajustes › Programa › Estado de los bares,
+                // migración 0054); de producción no se vuelve
+                if (_tbai!['entorno'] == 'produccion')
+                  const Text('Producción (con efectos fiscales)', style: TextStyle(fontWeight: FontWeight.w600, color: C.verde))
+                else
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment(value: 'simulado', label: Text('Simulado')),
+                      ButtonSegment(value: 'pruebas', label: Text('Pruebas Hacienda')),
+                    ],
+                    selected: {_entorno},
+                    onSelectionChanged: (s) => setState(() => _entorno = s.first),
+                  ),
                 const SizedBox(height: 8),
                 Text(
                   switch (_entorno) {

@@ -7,6 +7,7 @@ import '../../core/hora_equipo.dart';
 import '../../main.dart';
 import '../auth/perfil.dart';
 import '../barra/venta_offline.dart';
+import 'cadena_equipo.dart';
 import 'caducidad_certificados.dart';
 import 'facturacion_service.dart';
 
@@ -43,6 +44,23 @@ class EnviosPendientes {
     revisar();
   }
 
+  /// El bar ha pasado a producción y este equipo sigue con su serie de pruebas: pide una nueva él
+  /// solo (migración 0054), cuando ya no le queda nada sin subir de la serie anterior.
+  static Future<void> _renovarSerieEquipo() async {
+    try {
+      final serie = await CadenaEquipo.serie();
+      if (serie == null || (await VentaOffline.cola()).isNotEmpty) return;
+      final fila = await supabase.from('tbai_series').select('entorno').eq('serie', serie).eq('tipo', 'equipo')
+          .order('creada_en', ascending: false).limit(1).maybeSingle();
+      if (fila == null || fila['entorno'] == 'produccion') return;
+      final nueva = await supabase.rpc('tbai_renovar_serie_equipo', params: {'p_anterior': serie}) as String;
+      await CadenaEquipo.guardarSerie(nueva);
+      await VentaOffline.guardarContexto();
+    } catch (_) {
+      // Si no se puede, el administrador le asigna una en Ajustes › Empresa, como siempre
+    }
+  }
+
   static Future<void> revisar() async {
     if (_enMarcha || supabase.auth.currentSession == null) return;
     if (!Conexion.enLinea.value) {
@@ -74,6 +92,7 @@ class EnviosPendientes {
       final servicio = FacturacionService();
       // Cocina no firma ni envía (el servidor se lo niega): solo cuenta lo pendiente
       final envia = Perfil.cache?.rol != Rol.cocinero;
+      if (entorno == 'produccion' && envia) await _renovarSerieEquipo();
       for (final f in envia ? pendientes : const <Map<String, dynamic>>[]) {
         try {
           final r = await servicio.reenviar(f);

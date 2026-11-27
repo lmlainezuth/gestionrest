@@ -61,6 +61,10 @@ const NOMBRES: Record<string, string> = {
   factura_forzada: "ventas en espera enviadas tal cual por el administrador (factura forzada)",
   usuario_creado: "altas de usuarios",
   altas_limitadas: "altas de usuarios frenadas por el tope (más de 10 en una hora)",
+  alta_bar: "altas de bar (programador)",
+  certificado_subido: "certificados del titular subidos o sustituidos",
+  paso_produccion: "pasos a producción",
+  produccion_denegada: "intentos de pasar a producción que no se hicieron",
 };
 
 Deno.serve(async (req) => {
