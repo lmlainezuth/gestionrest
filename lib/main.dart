@@ -10,6 +10,7 @@ import 'core/config.dart';
 import 'core/software.dart';
 import 'core/tema.dart';
 import 'features/auth/auth_gate.dart';
+import 'features/caja/cobro_dialog.dart' show UltimaVenta;
 import 'features/ticketbai/envios_pendientes.dart';
 
 Future<void> main() async {
@@ -25,6 +26,10 @@ Future<void> main() async {
     httpClient: ClienteConLimite(),
   );
   Conexion.iniciar();
+  // Al salir un usuario, el siguiente no ve la última venta del anterior
+  Supabase.instance.client.auth.onAuthStateChange.listen((e) {
+    if (e.event == AuthChangeEvent.signedOut) UltimaVenta.dato.value = null;
+  });
   await Software.cargarCopia(); // datos del programa guardados en el equipo (sin internet)
   runApp(const GestionRestApp());
 }

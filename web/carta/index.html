@@ -34,7 +34,8 @@
 <nav id="grupos"></nav>
 <main id="carta"><div class="estado">Cargando la carta…</div></main>
 <script>
-// Carta pública de GestiónRest: /carta/?e=<id de la empresa>. Solo lectura (función carta_publica).
+// Carta pública de GestiónRest: /carta/?c=<código de la carta>. Solo lectura (función carta_publica).
+// El código es el de empresa.codigo_carta, no el id de la empresa (los enlaces antiguos ?e= ya no valen).
 const URL_SB = "https://zouujjameuyyedqiotxt.supabase.co";
 const CLAVE = "sb_publishable_oF8647VghLNyzdG71lwJ0Q_vdkwZZ5a";
 const ALERGENOS = { gluten: "Gluten", crustaceos: "Crustáceos", huevo: "Huevo", pescado: "Pescado", cacahuete: "Cacahuete",
@@ -45,13 +46,13 @@ const eur = (v) => Number(v).toLocaleString("es-ES", { style: "currency", curren
 const main = document.getElementById("carta");
 
 async function cargar() {
-  const empresa = new URLSearchParams(location.search).get("e");
-  if (!empresa) { main.innerHTML = '<div class="estado">Falta el código del bar en el enlace.</div>'; return; }
+  const codigo = new URLSearchParams(location.search).get("c");
+  if (!codigo) { main.innerHTML = '<div class="estado">Este enlace ya no vale. Pide en el bar el código QR nuevo de la carta.</div>'; return; }
   try {
     const r = await fetch(`${URL_SB}/rest/v1/rpc/carta_publica`, {
       method: "POST",
       headers: { apikey: CLAVE, "Content-Type": "application/json" },
-      body: JSON.stringify({ p_empresa: empresa }),
+      body: JSON.stringify({ p_codigo: codigo }),
     });
     const c = await r.json();
     if (!r.ok || !c) throw new Error();

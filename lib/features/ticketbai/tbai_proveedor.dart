@@ -12,6 +12,7 @@ import '../../core/envio_tbai.dart' if (dart.library.io) '../../core/envio_tbai_
 import '../../core/firma_equipo.dart' if (dart.library.io) '../../core/firma_equipo_io.dart';
 import '../../main.dart';
 import 'firma_xades.dart';
+import 'titular_nif.dart';
 
 class FirmaResultado {
   final String xmlFirmado;
@@ -159,7 +160,13 @@ class ProveedorGipuzkoa implements TicketBaiProveedor {
   Future<EnvioResultado> _enviarA(String servicio, String xmlFirmado) async {
     try {
       final Map<String, dynamic> r;
-      final cert = kIsWeb || !FirmaEquipo.soportada ? null : await CertificadoEquipo.leer();
+      var cert = kIsWeb || !FirmaEquipo.soportada ? null : await CertificadoEquipo.leer();
+      // Solo se envía con el certificado del equipo lo de su titular; lo de otro bar va por el puente
+      if (cert != null) {
+        final nif = nifEmisor(xmlFirmado);
+        final titular = (await FirmaEquipo.certificado(cert.bytes, cert.clave)).titular;
+        if (nif == null || !certificadoDelNif(titular, nif)) cert = null;
+      }
       if (cert != null) {
         // Equipo con certificado instalado (Windows o Android): envía él mismo
         r = await _conCertificado(xmlFirmado, servicio, cert.bytes, cert.clave);
@@ -196,6 +203,10 @@ Future<FirmaResultado?> firmarEnEquipo(String xml) async {
   final cert = await CertificadoEquipo.leer();
   if (cert == null) return null;
   final c = await FirmaEquipo.certificado(cert.bytes, cert.clave);
+  // El certificado del equipo solo firma lo de su titular: si el usuario está en otro bar, firma el
+  // servidor con el certificado de ese bar (y comprueba el NIF)
+  final nif = nifEmisor(xml);
+  if (nif == null || !certificadoDelNif(c.titular, nif)) return null;
   if (c.caduca.isBefore(DateTime.now())) {
     throw StateError('El certificado de este equipo caducó el ${c.caduca.toLocal().toString().substring(0, 10)}: renuévalo');
   }

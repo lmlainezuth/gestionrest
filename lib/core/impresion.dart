@@ -5,7 +5,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../features/ticketbai/modelos.dart' show Desglose, LineaFactura, euros;
+import '../features/ticketbai/modelos.dart' show Desglose, LineaFactura, euros, textoEntre;
 import '../main.dart';
 import 'conexion.dart';
 import 'empresa_dispositivo.dart';
@@ -224,6 +224,8 @@ class Impresion {
             ..fila('CAMBIO', _importe(entregado - (p['importe'] as num)));
         }
       }
+      final entre = textoEntre(f);
+      if (entre != null) t.linea(entre.toUpperCase(), centro: true);
       t
         ..saltos(1)
         ..linea('*** GRACIAS POR SU VISITA ***', centro: true)
@@ -269,6 +271,7 @@ class Impresion {
             _fila('IVA ${tr.tipo.toStringAsFixed(0)} %', euros(tr.cuota), s),
           ],
           _fila('TOTAL (IVA incl.)', euros(f['importe_total'] as num), b.copyWith(fontSize: 11)),
+          if (textoEntre(f) case final entre?) pw.Text(entre, textAlign: pw.TextAlign.center, style: s),
           _raya(),
           pw.Text('${f['tbai_id']}', textAlign: pw.TextAlign.center, style: s.copyWith(fontSize: 7)),
           pw.SizedBox(height: 4),

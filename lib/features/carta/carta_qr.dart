@@ -5,27 +5,43 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../../core/red.dart';
 import '../../core/tema.dart';
+import '../../main.dart';
 import '../auth/perfil.dart';
 
-/// Dirección pública de la carta (página web ligera en Netlify).
-String? enlaceCarta() {
-  final e = Perfil.cache?.empresaId;
-  return e == null ? null : 'https://gestionrest.netlify.app/carta/?e=$e';
+/// Dirección pública de la carta (página web ligera en Netlify). Lleva el código propio de la
+/// carta (empresa.codigo_carta, migración 0037), no el id de la empresa: ese id no sale del bar,
+/// porque con él la pantalla de entrada enseña quién trabaja aquí.
+Future<String?> enlaceCarta() async {
+  if (Perfil.cache?.empresaId == null) return null;
+  final fila = await supabase.from('empresa').select('codigo_carta').limit(1).maybeSingle();
+  final c = fila?['codigo_carta'] as String?;
+  return c == null ? null : 'https://gestionrest.netlify.app/carta/?c=$c';
+}
+
+/// (enlace, aviso): el enlace, o por qué no se ha podido leer.
+Future<(String?, String?)> _leerEnlace() async {
+  try {
+    return (await enlaceCarta(), null);
+  } catch (e) {
+    return (null, esErrorDeRed(e) ? 'Hace falta internet para ver el QR de la carta' : 'No se pudo leer el código de la carta: $e');
+  }
 }
 
 /// QR de la carta para las mesas: verlo, copiar el enlace o imprimir el cartel.
-Future<void> mostrarQrCarta(BuildContext context) {
-  final url = enlaceCarta();
+Future<void> mostrarQrCarta(BuildContext context) async {
+  final (url, aviso) = await _leerEnlace();
+  if (!context.mounted) return;
   final nombre = Perfil.cache?.empresaNombre ?? '';
-  return showDialog(
+  await showDialog<void>(
     context: context,
     builder: (ctx) => AlertDialog(
       title: const Text('Carta QR'),
       content: SizedBox(
         width: 320,
         child: url == null
-            ? const Text('Elige antes la empresa')
+            ? Text(aviso ?? 'Elige antes la empresa')
             : Column(mainAxisSize: MainAxisSize.min, children: [
                 QrImageView(data: url, size: 240),
                 const SizedBox(height: 8),

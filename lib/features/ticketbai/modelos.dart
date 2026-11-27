@@ -106,3 +106,12 @@ double _r2(double v) => (v * 100).roundToDouble() / 100;
 
 /// 78.4 -> "78,40 €"
 String euros(num v) => '${v.toStringAsFixed(2).replaceAll('.', ',')} €';
+
+/// Pie del ticket cuando la cuenta se pagó a partes iguales («Entre N» en el cobro).
+/// Solo al cobrar: el reparto no se guarda, así que una reimpresión posterior no lo lleva.
+String? textoEntre(Map<String, dynamic> f) {
+  final n = f['entre'];
+  if (n is! int || n < 2) return null;
+  final parte = ((f['importe_total'] as num) / n * 100).ceilToDouble() / 100;
+  return 'Pagado entre $n · ${euros(parte)} por persona';
+}

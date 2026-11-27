@@ -114,6 +114,34 @@ async function enviar(xmlFirmado: string, cert: Certificado, entorno: 'pruebas' 
   }
 }
 
+// ¿Es el certificado de este NIF? Misma regla que la app (lib/features/ticketbai/titular_nif.dart).
+// Con identificador de entidad (VATES-…, el titular en los certificados de representante) tiene que
+// ser ese: no vale el DNI del representante que también va en el sujeto. Sin él, el NIF tiene que
+// aparecer como palabra suelta, no como trozo de otra.
+function certificadoDelNif(titular: string, nif: string): boolean {
+  const t = titular.toUpperCase();
+  if (nif.length !== 9) return false;
+  const entidad = new Set([...t.matchAll(/VATES-?([A-Z0-9]{9})/g)].map((m) => m[1]));
+  if (entidad.size > 0) return entidad.has(nif);
+  return new RegExp(`(^|[^A-Z0-9])${nif.replace(/[^A-Z0-9]/g, '')}([^A-Z0-9]|$)`).test(t);
+}
+
+// Solo se firma o se envía un fichero TicketBAI de ESTE titular: raíz conocida y NIF del emisor
+// igual al de la empresa. Sin comentarios, CDATA ni DOCTYPE, que servirían para esconder otro emisor.
+function comprobarXml(xml: unknown, nif: string, raices: string[]): string | null {
+  if (typeof xml !== 'string' || xml.length === 0) return 'Falta el XML';
+  if (xml.length > 200_000) return 'XML demasiado grande';
+  if (/<!--|<!\[CDATA\[|<!DOCTYPE|<!ENTITY/i.test(xml)) return 'El XML lleva partes no admitidas';
+  const raiz = xml.match(/^﻿?\s*(?:<\?xml[^>]*\?>\s*)?<(?:[\w.-]+:)?([\w.-]+)[\s>]/)?.[1];
+  if (!raiz || !raices.includes(raiz)) return 'No es un fichero TicketBAI';
+  const abiertos = xml.match(/<(?:[\w.-]+:)?Emisor[\s>]/g)?.length ?? 0;
+  const emisores = [...xml.matchAll(/<(?:[\w.-]+:)?Emisor>\s*<(?:[\w.-]+:)?NIF>([^<]*)</g)].map((m) => m[1].trim().toUpperCase());
+  if (emisores.length === 0 || emisores.length !== abiertos || emisores.some((e) => e !== nif)) {
+    return 'El NIF del emisor del fichero no es el de la empresa';
+  }
+  return null;
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
   try {
@@ -137,7 +165,7 @@ Deno.serve(async (req) => {
     }
     const cert = await leerCertificado(p12, clave);
     const nif = String(config.nif ?? '').trim().toUpperCase();
-    const coincide = nif.length > 0 && cert.titular.toUpperCase().includes(nif);
+    const coincide = certificadoDelNif(cert.titular, nif);
 
     const cuerpo = await req.json();
     if (cuerpo.accion === 'probar') {
@@ -149,22 +177,37 @@ Deno.serve(async (req) => {
     if (!coincide) {
       return json({ error: `El certificado configurado no es del NIF de la empresa (${nif || 'sin NIF'}): no se firma` }, 400);
     }
+    // Firmar, enviar y dar el certificado al puente: solo quien cobra (nunca cocina)
+    const { data: rol } = await supa.rpc('mi_rol');
+    if (rol !== 'admin' && rol !== 'camarero') {
+      return json({ error: 'Solo el administrador o un camarero pueden firmar y enviar facturas' }, 403);
+    }
     if (cuerpo.accion === 'certificado') {
       // Solo para el servicio puente de Netlify (conoce el secreto compartido)
       const secreto = Deno.env.get('PUENTE_SECRETO');
       if (!secreto || req.headers.get('x-puente-secreto') !== secreto) return json({ error: 'No autorizado' }, 403);
-      // El entorno lo decide la configuración del bar, no lo que diga la app
-      return json({ p12, clave, entorno: config.entorno });
+      // El entorno lo decide la configuración del bar, no lo que diga la app.
+      // El rol va al puente: solo un administrador puede anular o subsanar en Hacienda
+      return json({ p12, clave, entorno: config.entorno, nif, rol });
     }
     if (config.entorno !== 'pruebas' && config.entorno !== 'produccion') {
       return json({ error: `El entorno es "${config.entorno}": cámbialo a pruebas o producción` }, 400);
     }
     if (cuerpo.accion === 'firmar') {
       // Primero se firma; la app guarda la factura y después la envía con 'reenviar'
+      // Anular es solo del administrador, igual que en la base (tbai_anulaciones)
+      if (rol !== 'admin' && String(cuerpo.xml).includes('AnulaTicketBai')) {
+        return json({ error: 'Solo el administrador puede anular facturas' }, 403);
+      }
+      const mal = comprobarXml(cuerpo.xml, nif, rol === 'admin' ? ['TicketBai', 'AnulaTicketBai'] : ['TicketBai']);
+      if (mal) return json({ error: mal }, 400);
       const { xml, signatureValue } = await firmar(cuerpo.xml as string, cert);
       return json({ ok: true, xmlFirmado: xml, signatureValue });
     }
     if (cuerpo.accion === 'reenviar') {
+      // Esta acción solo envía al servicio de alta
+      const mal = comprobarXml(cuerpo.xmlFirmado, nif, ['TicketBai']);
+      if (mal) return json({ error: mal }, 400);
       const r = await enviar(cuerpo.xmlFirmado as string, cert, config.entorno);
       return json({ ok: true, ...r });
     }

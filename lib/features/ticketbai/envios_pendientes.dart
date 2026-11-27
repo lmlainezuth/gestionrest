@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../core/conexion.dart';
 import '../../core/hora_equipo.dart';
 import '../../main.dart';
+import '../auth/perfil.dart';
 import '../barra/venta_offline.dart';
 import 'caducidad_certificados.dart';
 import 'facturacion_service.dart';
@@ -71,7 +72,9 @@ class EnviosPendientes {
           .order('creado_en')
           .limit(100));
       final servicio = FacturacionService();
-      for (final f in pendientes) {
+      // Cocina no firma ni envía (el servidor se lo niega): solo cuenta lo pendiente
+      final envia = Perfil.cache?.rol != Rol.cocinero;
+      for (final f in envia ? pendientes : const <Map<String, dynamic>>[]) {
         try {
           final r = await servicio.reenviar(f);
           // Sigue sin conexión: no insiste con las demás hasta la próxima vuelta
@@ -82,7 +85,9 @@ class EnviosPendientes {
       }
       final anulaciones = List<Map<String, dynamic>>.from(
           await supabase.from('tbai_anulaciones').select().eq('estado_envio', 'pendiente').order('fecha'));
-      for (final a in anulaciones) {
+      // Las anulaciones solo las envía un administrador (el servidor se lo niega a los demás)
+      final enviaAnulaciones = Perfil.cache?.rol == Rol.admin;
+      for (final a in enviaAnulaciones ? anulaciones : const <Map<String, dynamic>>[]) {
         try {
           if ((await servicio.reenviarAnulacion(a))['estado_envio'] == 'pendiente') break;
         } catch (_) {

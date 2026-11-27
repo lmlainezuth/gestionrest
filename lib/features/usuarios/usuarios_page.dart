@@ -96,7 +96,7 @@ class _UsuariosPageState extends State<UsuariosPage> {
             keyboardType: TextInputType.number,
             textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 28, letterSpacing: 12),
-            decoration: InputDecoration(labelText: p['rol'] == 'admin' ? 'PIN (6 a 8 cifras)' : 'PIN (1 a 8 cifras)', counterText: ''),
+            decoration: InputDecoration(labelText: p['rol'] == 'admin' ? 'PIN (6 a 8 cifras)' : 'PIN (4 a 8 cifras)', counterText: ''),
           ),
         ),
         actions: [
@@ -310,7 +310,7 @@ class _NuevoUsuarioState extends State<_NuevoUsuario> {
               keyboardType: TextInputType.number,
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 28, letterSpacing: 12),
-              decoration: InputDecoration(labelText: _rol == 'admin' ? 'PIN (6 a 8 cifras)' : 'PIN (1 a 8 cifras)', counterText: ''),
+              decoration: InputDecoration(labelText: _rol == 'admin' ? 'PIN (6 a 8 cifras)' : 'PIN (4 a 8 cifras)', counterText: ''),
             ),
             const SizedBox(height: 16),
             SegmentedButton<String>(

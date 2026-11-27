@@ -104,6 +104,25 @@ class _CobroDialogState extends State<CobroDialog> {
   double get _restante => ((_total - _pagado) * 100).roundToDouble() / 100;
   double get _importeActual => leerImporte(_importe.text) ?? 0;
 
+  /// Si se eligió «Entre N», cada pago propone su parte (el último, lo que falte).
+  int? _entre;
+  double get _propuesto {
+    if (_entre == null) return _restante;
+    final parte = (_total / _entre! * 100).ceilToDouble() / 100;
+    return parte > _restante ? _restante : parte;
+  }
+
+  /// ¿Se pagó de verdad a partes iguales? N pagos, todos de la parte (el último, lo que faltaba).
+  bool get _aPartesIguales {
+    final n = _entre;
+    if (n == null || _pagos.length != n) return false;
+    final parte = (_total / n * 100).ceilToDouble() / 100;
+    for (var i = 0; i < n - 1; i++) {
+      if ((_pagos[i].importe - parte).abs() > 0.005) return false;
+    }
+    return _pagos.last.importe <= parte + 0.005;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -139,7 +158,7 @@ class _CobroDialogState extends State<CobroDialog> {
       _pagos.add((metodo: _metodo, importe: real, entregado: _metodo == 'efectivo' ? (entregado ?? imp) : null));
       _error = null;
       _entregado.clear();
-      _ponerImporte(_restante);
+      _ponerImporte(_propuesto);
       _nuevo = true;
     });
     return true;
@@ -258,6 +277,7 @@ class _CobroDialogState extends State<CobroDialog> {
           for (final p in _pagos) {'metodo': p.metodo, 'importe': p.importe, 'entregado': p.entregado},
         ],
         if (widget.mesaId == null) 'origen': 'Barra',
+        if (_aPartesIguales) 'entre': _entre, // sale impreso en el ticket
       };
       UltimaVenta.guardar(_total, List<Map<String, dynamic>>.from(paraTicket['pagos'] as List));
       if (mounted) Navigator.pop(context, paraTicket);
@@ -325,7 +345,7 @@ class _CobroDialogState extends State<CobroDialog> {
                     tooltip: 'Quitar pago',
                     onPressed: _cobrando ? null : () => setState(() {
                       _pagos.remove(p);
-                      _ponerImporte(_restante);
+                      _ponerImporte(_propuesto);
                     }),
                     icon: const Icon(Icons.close),
                   ),
@@ -373,10 +393,14 @@ class _CobroDialogState extends State<CobroDialog> {
                   const SizedBox(width: 8),
                   PopupMenuButton<int>(
                     tooltip: 'Dividir a partes iguales',
-                    onSelected: (n) => setState(() => _ponerImporte((_total / n * 100).ceilToDouble() / 100 > _restante
-                        ? _restante
-                        : (_total / n * 100).ceilToDouble() / 100)),
-                    itemBuilder: (_) => [for (final n in [2, 3, 4, 5, 6]) PopupMenuItem(value: n, child: Text('Entre $n'))],
+                    onSelected: (n) => setState(() {
+                      _entre = n == 0 ? null : n; // 0 = sin dividir
+                      _ponerImporte(_propuesto);
+                    }),
+                    itemBuilder: (_) => [
+                      for (final n in [2, 3, 4, 5, 6]) PopupMenuItem(value: n, child: Text('Entre $n')),
+                      if (_entre != null) const PopupMenuItem(value: 0, child: Text('Sin dividir')),
+                    ],
                     child: const Padding(
                       padding: EdgeInsets.all(8),
                       child: Row(children: [Icon(Icons.groups_outlined), SizedBox(width: 4), Text('Entre…')]),

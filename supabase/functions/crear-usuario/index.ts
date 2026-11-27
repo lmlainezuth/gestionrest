@@ -35,7 +35,8 @@ Deno.serve(async (req) => {
 
   const b = await req.json();
   const pin = String(b.pin ?? "");
-  if (!/^\d{1,8}$/.test(pin)) return json({ error: "El PIN debe tener entre 1 y 8 cifras" }, 400);
+  // Mínimo 4 cifras para todos: con menos, un PIN se adivina probando
+  if (!/^\d{4,8}$/.test(pin)) return json({ error: "El PIN debe tener entre 4 y 8 cifras" }, 400);
   // Un administrador lo puede todo en su bar: su PIN no puede ser de los que se adivinan probando
   const PIN_ADMIN = 6;
   const pinCorto = (rol: string) => rol === "admin" && pin.length < PIN_ADMIN;

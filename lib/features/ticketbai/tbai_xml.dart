@@ -77,7 +77,9 @@ class TbaiXml {
         ..write('<IDDetalleFactura>')
         ..write('<DescripcionDetalle>${_e(l.descripcion)}</DescripcionDetalle>')
         ..write('<Cantidad>${n2(l.cantidad)}</Cantidad>')
-        ..write('<ImporteUnitario>${n2(l.precioUnitario / (1 + l.tipoIva / 100))}</ImporteUnitario>')
+        // 8 decimales, sin redondear a céntimos: con cantidades grandes el redondeo descuadra la línea
+        // con su total y Hacienda avisa (5016, 5018)
+        ..write('<ImporteUnitario>${(l.precioUnitario / (1 + l.tipoIva / 100)).toStringAsFixed(8)}</ImporteUnitario>')
         ..write('<Descuento>0.00</Descuento>')
         ..write('<ImporteTotal>${n2(l.total)}</ImporteTotal>')
         ..write('</IDDetalleFactura>');

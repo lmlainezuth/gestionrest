@@ -11,6 +11,7 @@ import 'cierre_ciego.dart';
 import '../ticketbai/modelos.dart' show euros;
 import 'abrir_caja.dart';
 import 'caja_service.dart';
+import 'cobro_dialog.dart' show UltimaVenta;
 import '../barra/venta_offline.dart';
 
 /// Turno de caja: apertura con fondo, ventas por forma de pago,
@@ -183,6 +184,7 @@ class _CajaPageState extends State<CajaPage> {
         'p_fondo': datos['fondo'],
       }) as Map);
     });
+    if (r != null) UltimaVenta.dato.value = null; // caja cerrada: la última venta ya no se enseña
     if (!mounted || r == null) return;
     void imprimir() => imprimirCierreCaja(
           r: r!, datos: datos, turno: turno, cajaNombre: cajaNombre,

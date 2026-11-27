@@ -71,9 +71,27 @@ class _LoginPageState extends State<LoginPage> {
 
   Future<void> _entrarConPin() async {
     setState(() => _entrando = true);
-    final correo = _elegido!['correo'] as String;
     try {
+      // El correo interno solo lo da el servidor con el PIN correcto (y cuenta los fallos)
+      final empresa = await EmpresaDispositivo.leer();
+      final correo = await supabase.rpc('correo_pin',
+          params: {'p_empresa': empresa, 'p_usuario': _elegido!['id'], 'p_pin': _pin}) as String?;
+      if (correo == null) {
+        setState(() {
+          _error = 'PIN incorrecto';
+          _pin = '';
+          _entrando = false;
+        });
+        return;
+      }
       await supabase.auth.signInWithPassword(email: correo, password: claveDePin(_pin, correo));
+    } on PostgrestException catch (e) {
+      // Demasiados PIN incorrectos, o el empleado ya no está en este bar
+      setState(() {
+        _error = e.message;
+        _pin = '';
+        _entrando = false;
+      });
     } on AuthException catch (e) {
       setState(() {
         _error = e.message == 'Invalid login credentials' ? 'PIN incorrecto' : e.message;
