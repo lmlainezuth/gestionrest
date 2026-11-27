@@ -12,6 +12,7 @@ import '../ticketbai/cadena_equipo.dart';
 import '../ticketbai/caducidad_certificados.dart';
 import '../../main.dart';
 import '../ticketbai/tbai_proveedor.dart' show probarCertificado;
+import '../auth/perfil.dart';
 import '../ticketbai/verificacion_presencial.dart';
 import '../../core/software.dart';
 
@@ -38,6 +39,7 @@ class _EmpresaTabState extends State<EmpresaTab> {
   String? _certEquipo; // nombre del .pfx guardado en este equipo
   Map<String, dynamic>? _empresa, _tbai, _caja;
   bool _cargando = true, _guardando = false;
+  bool _usaCocina = true;
   String? _error;
 
   @override
@@ -56,6 +58,7 @@ class _EmpresaTabState extends State<EmpresaTab> {
       _nif.text = _tbai!['nif'] as String? ?? '';
       _direccion.text = _empresa!['direccion'] as String? ?? '';
       _telefono.text = _empresa!['telefono'] as String? ?? '';
+      _usaCocina = _empresa!['usa_cocina'] as bool? ?? true;
       _entorno = _tbai!['entorno'] as String? ?? 'simulado';
       _certEquipo = (await CertificadoEquipo.leer())?.nombre;
       _serieEquipo = await CadenaEquipo.serie();
@@ -81,7 +84,13 @@ class _EmpresaTabState extends State<EmpresaTab> {
         'documento_fiscal': nif,
         'direccion': _direccion.text.trim(),
         'telefono': _telefono.text.trim(),
+        if (_empresa!.containsKey('usa_cocina')) 'usa_cocina': _usaCocina,
       }).eq('id', _empresa!['id']);
+      // Cambió la pantalla de cocina: el menú se rehace (aparece o desaparece Cocina)
+      if (_empresa!.containsKey('usa_cocina') && _empresa!['usa_cocina'] != _usaCocina) {
+        _empresa!['usa_cocina'] = _usaCocina;
+        recargaApp.value++;
+      }
       await supabase.from('tbai_config').update({
         'nif': nif,
         'razon_social': _razon.text.trim(),
@@ -178,6 +187,16 @@ class _EmpresaTabState extends State<EmpresaTab> {
                 campo(_nombre, 'Nombre comercial', validar: obligatorio),
                 campo(_direccion, 'Dirección', lineas: 3, ayuda: 'Un renglón por línea del ticket: calle · barrio · código postal y localidad'),
                 campo(_telefono, 'Teléfono'),
+                if (_empresa!.containsKey('usa_cocina'))
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: _usaCocina,
+                    onChanged: Perfil.cache?.esAdmin == true ? (v) => setState(() => _usaCocina = v) : null,
+                    title: const Text('Usa pantalla de cocina'),
+                    subtitle: Text(_usaCocina
+                        ? 'Los platos de cocina van a la pantalla de Cocina hasta que se marcan servidos.'
+                        : 'Sin pantalla de cocina: los platos se guardan ya como servidos y la pestaña Cocina no se ve.'),
+                  ),
                 const SizedBox(height: 8),
                 Text('Datos fiscales', style: titulo(20)),
                 const SizedBox(height: 12),

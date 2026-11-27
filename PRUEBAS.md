@@ -153,6 +153,25 @@ Antes: la `0054` en el SQL Editor, el secreto `TBAI_CLAVE_MAESTRA` creado y las 
 | A.13 | Panel Seguridad del bar nuevo y aviso diario del día siguiente (o `alertas-seguridad` con `{"siempre":true}`) | «Alta del bar», «Certificado del titular subido…» y, si probaste A.12 por la API, «Intento de pasar a producción que no se hizo» |
 | A.14 | Quita del bar nuevo los usuarios de prueba cuando acabes | — |
 
+## Cocina (0056)
+
+Antes: la `0056` en el SQL Editor (al final dice en «Messages» cuántos platos atascados pasó a servido) y
+la app nueva. Para saber antes cuántos cambiará, la consulta comentada al principio de la migración.
+
+| # | Qué hacer | Qué tiene que pasar |
+|---|---|---|
+| C.1 | Abre Cocina después de ejecutar la `0056` | El plato de 1521 minutos ya no está. **(SQL)** `select count(*) from pedido_detalle where estado_cocina in ('pendiente','preparando','listo') and creado_en < now() - interval '24 hours';` → 0 |
+| C.2 | Pide un plato de cocina en una mesa y no lo marques en Cocina; cobra la mesa | En Cocina desaparece al cobrar. En la comanda el plato sale como servido |
+| C.3 | Igual, pero marca el plato «preparando» en Cocina antes de cobrar | También pasa a servido al cobrar |
+| C.4 | Cobra una venta **sin internet** con un plato de cocina; vuelve la red | Al subirse, el plato queda servido (no aparece en Cocina) |
+| C.5 | Pide un plato en una mesa, déjala **abierta** y cierra la caja | El plato pasa a servido y desaparece de Cocina. La mesa sigue abierta y se puede cobrar al día siguiente |
+| C.6 | **(SQL)** `update pedido_detalle set creado_en = now() - interval '25 hours' where id = '<un plato pendiente>';` y recarga Cocina | Ya no se ve (solo carga las últimas 24 horas) |
+| C.7 | Ajustes › Empresa como administrador: apaga «Usa pantalla de cocina» y guarda | La pestaña Cocina desaparece del menú. Un plato nuevo de cocina sale ya como servido en la comanda y no va a ninguna pantalla |
+| C.8 | Con el bar sin pantalla de cocina, entra con un cocinero | La pantalla avisa en amarillo «Este bar no usa la pantalla de cocina…» y no le llega nada |
+| C.9 | Como camarero, Ajustes › Empresa (si lo ve) | El interruptor está desactivado: solo lo cambia el administrador |
+| C.10 | Vuelve a encender «Usa pantalla de cocina» | Cocina vuelve a aparecer y los platos nuevos vuelven a llegar |
+| C.11 | Después de C.2 a C.7: Números › Anulaciones y Números › Seguridad | **Nada nuevo**: pasar a servido no es una anulación ni un evento de seguridad. **(SQL)** `select count(*) from registro_anulaciones where momento > now() - interval '1 hour';` → solo lo que anulaste tú a propósito |
+
 ---
 
 # Parte 2 · Pruebas por API (script)
@@ -207,6 +226,7 @@ de variables de entorno o lo pregunta al empezar. Necesita Node 18 o más.
     (queda apuntado como «intento de pasar a producción» en Seguridad).
   - Con `GR_CERT` y `GR_CERT_CLAVE` (el .p12 del titular del bar de pruebas): contraseña mal,
     otro NIF y el bueno.
+- **Cocina (0056):** un camarero no puede apagar la pantalla de cocina del bar.
 - **Con `--entorno`:** el administrador intenta pasar el bar a producción por la API → rechazado. Si la
   `0054` no estuviera aplicada pasaría: el script lo vuelve a dejar como estaba en el acto y lo marca
   como fallo. **Lánzalo solo con «0054_alta_bar» en verde en `comprobar_migraciones.sql`.**

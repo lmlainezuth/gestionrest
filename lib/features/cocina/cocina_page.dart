@@ -94,12 +94,15 @@ class _CocinaPageState extends State<CocinaPage> {
     try {
       final haceUnaHora = DateTime.now().toUtc().subtract(const Duration(hours: 1)).toIso8601String();
       final hace15 = DateTime.now().toUtc().subtract(const Duration(minutes: 15)).toIso8601String();
+      // Solo lo pedido en las últimas 24 horas: lo más viejo ya no se va a cocinar
+      final hace24 = DateTime.now().toUtc().subtract(const Duration(hours: 24)).toIso8601String();
       final filas = await supabase
           .from('pedido_detalle')
           .select('id, pedido_id, descripcion, cantidad, nota, curso, estado_cocina, en_espera, '
               'area_id, creado_en, listo_en, anulado_motivo, productos(alergenos), '
               'pedidos!inner(id, numero, tipo, nombre_llevar, estado, mesas(nombre))')
           .neq('pedidos.estado', 'anulado')
+          .gte('creado_en', hace24)
           .or('estado_cocina.in.(pendiente,preparando),'
               'and(estado_cocina.eq.listo,listo_en.gte.$haceUnaHora),'
               'and(estado_cocina.eq.anulado,anulado_en.gte.$hace15)')
@@ -219,6 +222,14 @@ class _CocinaPageState extends State<CocinaPage> {
               ],
             ),
           ),
+          if (Perfil.cache?.usaCocina == false)
+            Container(
+              width: double.infinity,
+              color: _amarillo,
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
+              child: const Text('Este bar no usa la pantalla de cocina: los platos se guardan ya como servidos '
+                  '(Ajustes › Empresa)', style: TextStyle(color: _fondo, fontWeight: FontWeight.w600)),
+            ),
           Expanded(
             child: _cargando
                 ? const Center(child: CircularProgressIndicator())

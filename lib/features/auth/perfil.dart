@@ -18,6 +18,7 @@ class Perfil {
   final List<String>? permisos; // null = los de su rol por defecto
   final String? empresaId;
   final String? empresaNombre;
+  final bool usaCocina; // ajuste del bar (migración 0056); sin él, sí
 
   const Perfil({
     required this.id,
@@ -27,6 +28,7 @@ class Perfil {
     this.permisos,
     this.empresaId,
     this.empresaNombre,
+    this.usaCocina = true,
   });
 
   /// Último perfil cargado (para saber el rol desde cualquier pantalla).
@@ -50,6 +52,13 @@ class Perfil {
       final filas = await supabase.rpc('mi_perfil') as List;
       if (filas.isEmpty) return cache = null;
       m = Map<String, dynamic>.from(filas.first as Map);
+      // Ajuste del bar: ¿usa pantalla de cocina? (antes de la 0056 no existe: sí)
+      try {
+        final e = await supabase.from('empresa').select('usa_cocina').limit(1).maybeSingle();
+        m['usa_cocina'] = e?['usa_cocina'] as bool? ?? true;
+      } catch (_) {
+        m['usa_cocina'] = true;
+      }
       // Datos del programa (licencia, desarrollador) al día en este equipo
       Software.cargar().ignore();
       // Copia en el equipo: si se abre la app sin internet, se entra con el último perfil
@@ -68,6 +77,7 @@ class Perfil {
       permisos: (m['permisos'] as List?)?.cast<String>(),
       empresaId: m['empresa_id'] as String?,
       empresaNombre: m['empresa_nombre'] as String?,
+      usaCocina: m['usa_cocina'] as bool? ?? true,
     );
   }
 }

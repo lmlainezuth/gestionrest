@@ -64,7 +64,7 @@ class _AdminHomeState extends State<AdminHome> {
 
   late final _visibles = [
     for (final s in _secciones)
-      if (s.permisos.any(widget.perfil.puede)) s,
+      if (s.permisos.any(widget.perfil.puede) && (s.titulo != 'Cocina' || widget.perfil.usaCocina)) s,
   ];
 
   /// Botones de la cabecera: misma altura y forma que la pastilla del usuario.

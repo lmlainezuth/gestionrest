@@ -454,6 +454,13 @@ if (env.GR_PROGRAMADOR_EMAIL) {
   });
 }
 
+// =====================================================================
+console.log('\n— Cocina (0056) —');
+await prueba('Camarero: apagar la pantalla de cocina del bar, no cambia nada', async () => {
+  const r = await tabla('PATCH', 'empresa', `?id=eq.${EMPRESA}`, { usa_cocina: false }, cam);
+  return { ok: r.status >= 400 || (Array.isArray(r.datos) && r.datos.length === 0), detalle: `${r.status} ${r.texto.slice(0, 120)}` };
+});
+
 rl.close();
 const mal = resultados.filter((r) => !r.ok);
 console.log(`\n${resultados.length - mal.length} de ${resultados.length} pruebas bien.`);
