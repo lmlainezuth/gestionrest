@@ -15,6 +15,14 @@ import 'tbai_xml.dart';
 /// Emite facturas TicketBAI: numera, encadena y monta el fichero; el servidor lo comprueba, lo
 /// firma (o comprueba la firma del equipo) y lo guarda (migración 0050), y después se envía lo
 /// guardado. También anula, rectifica y convierte un ticket en factura con NIF.
+/// Última factura de una cadena y último número de una serie, leídos antes de cobrar.
+class NumeracionLeida {
+  const NumeracionLeida(this.cadena, this.serie, this.ultimas, this.ultimo);
+  final String cadena, serie;
+  final List<Map<String, dynamic>> ultimas;
+  final int? ultimo;
+}
+
 class FacturacionService {
   // Licencia y NIF del desarrollador: si la empresa no los tiene escritos, los del programa
   Future<Map<String, dynamic>> _config() => leerConfig();
@@ -49,6 +57,7 @@ class FacturacionService {
     bool enviarEnSegundoPlano = false, // cobro: no esperar a Hacienda (se envía detrás)
     Map<String, dynamic>? configLeida, // cobro: ya leídas a la vez que el turno (un viaje menos)
     Map<String, dynamic>? cajaLeida,
+    NumeracionLeida? numeracionLeida, // cobro: leída mientras el camarero elegía el importe
   }) async {
     // En paralelo: cada consulta es un viaje al servidor
     final r0 = await Future.wait([
@@ -90,15 +99,29 @@ class FacturacionService {
     // Varios intentos por si otro equipo de la misma cadena emite a la vez: la base de datos
     // rechaza (23505) que dos facturas cuelguen de la misma anterior o repitan número.
     for (var intento = 0; intento < 5; intento++) {
-      final r1 = await Future.wait<dynamic>([
-        supabase.rpc('tbai_ultima_factura', params: {'p_cadena': cadena}),
-        // El servidor mira todas las facturas de la serie (el camarero no las ve todas)
-        supabase.rpc('tbai_ultimo_numero', params: {'p_serie': serie}),
-      ]);
-      final ultimas = List<Map<String, dynamic>>.from(r1[0] as List);
+      // La leída por adelantado solo vale en el primer intento y si es de esta cadena y serie (con NIF
+      // la serie cambia). Si otro equipo emitió entre medias, el servidor lo rechaza y se vuelve a leer.
+      final leida = intento == 0 && numeracionLeida != null && numeracionLeida.cadena == cadena &&
+              numeracionLeida.serie == serie
+          ? numeracionLeida
+          : null;
+      final List<Map<String, dynamic>> ultimas;
+      final int? ultimoNumero;
+      if (leida != null) {
+        ultimas = leida.ultimas;
+        ultimoNumero = leida.ultimo;
+      } else {
+        final r1 = await Future.wait<dynamic>([
+          supabase.rpc('tbai_ultima_factura', params: {'p_cadena': cadena}),
+          // El servidor mira todas las facturas de la serie (el camarero no las ve todas)
+          supabase.rpc('tbai_ultimo_numero', params: {'p_serie': serie}),
+        ]);
+        ultimas = List<Map<String, dynamic>>.from(r1[0] as List);
+        ultimoNumero = (r1[1] as num?)?.toInt();
+      }
       final previa = ultimas.isEmpty ? null : ultimas.first;
-      final numero = ((r1[1] as num?)?.toInt() ?? 0) + 1;
-      CronoCobro.marca('Última factura y número');
+      final numero = (ultimoNumero ?? 0) + 1;
+      CronoCobro.marca(leida != null ? 'Última factura y número (ya leídos)' : 'Última factura y número');
       final firmador = proveedor is ProveedorSimulado ? proveedor.firmar : firmarEnEquipo;
       final fila = await prepararFactura(
         config: config,

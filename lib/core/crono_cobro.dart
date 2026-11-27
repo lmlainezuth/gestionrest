@@ -1,12 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-
-import '../features/auth/perfil.dart';
-import 'software.dart';
 
 /// Cronómetro del cobro, para saber en qué se va el tiempo. Solo mide: no cambia nada del cobro.
-/// Al terminar, el administrador y el programador ven el desglose (y la media de los últimos
-/// cobros). El tiempo que el camarero pasa en la ventana de cobro (importe, forma de pago) no cuenta.
+/// Al terminar, el desglose (y la media de los últimos cobros) sale en la consola de depuración,
+/// no en la pantalla. El tiempo que el camarero pasa en la ventana de cobro (importe, forma de pago) no cuenta.
 class CronoCobro {
   CronoCobro._();
   static Stopwatch? _reloj;
@@ -48,7 +44,7 @@ class CronoCobro {
 
   static String _s(int ms) => (ms / 1000).toStringAsFixed(2).replaceAll('.', ',');
 
-  /// Cobro terminado: enseña el desglose al administrador o al programador.
+  /// Cobro terminado: el desglose a la consola de depuración.
   static void terminar(BuildContext context) {
     if (_reloj == null) return;
     _reloj = null;
@@ -70,13 +66,7 @@ class CronoCobro {
         ],
       ],
     ].join('\n');
+    // Solo en la consola de depuración: en el bar no se enseña nada
     debugPrint(texto);
-    if (!(Perfil.cache?.esAdmin ?? false) && !Software.esProgramador) return;
-    if (!context.mounted) return;
-    ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(
-      duration: const Duration(seconds: 15),
-      content: Text(texto),
-      action: SnackBarAction(label: 'Copiar', onPressed: () => Clipboard.setData(ClipboardData(text: texto))),
-    ));
   }
 }

@@ -205,12 +205,66 @@ type Contexto = {
   marca: (paso: string) => void;
 };
 
+// Lo que registrar necesita leer de la base. Con el cobro normal llega todo de una sola consulta
+// (tbai_contexto_registro, 0057); si no (forzar, o sin la 0057), se lee con leerParaRegistrar.
+// ya: la factura ya guardada (reintento), true si existe pero falta leerla, o null.
+type Lecturas = {
+  ya: Record<string, unknown> | true | null;
+  ultima: Record<string, unknown> | null;
+  ultimo: number | null;
+  pedido: { id: string; empresa_id: string; total: number } | null;
+  otra: boolean;
+};
+
+async function leerParaRegistrar(cx: Contexto, fila: Record<string, unknown>): Promise<Lecturas> {
+  const { srv, supa, config } = cx;
+  const [rYa, rUltimas, rUltimo, rPed, rOtra] = await Promise.all([
+    typeof fila.id === 'string'
+      ? srv.from('facturas').select().eq('id', fila.id).eq('empresa_id', config.empresa_id).maybeSingle()
+      : Promise.resolve({ data: null }),
+    supa.rpc('tbai_ultima_factura', { p_cadena: String(fila.cadena ?? '') }),
+    supa.rpc('tbai_ultimo_numero', { p_serie: String(fila.serie ?? '') }),
+    fila.pedido_id
+      ? srv.from('pedidos').select('id, empresa_id, total').eq('id', fila.pedido_id).maybeSingle()
+      : Promise.resolve({ data: null }),
+    fila.pedido_id
+      ? srv.from('facturas').select('id').eq('pedido_id', fila.pedido_id).limit(1)
+      : Promise.resolve({ data: null }),
+  ]);
+  if (rUltimas.error) throw new Error(rUltimas.error.message);
+  if (rUltimo.error) throw new Error(rUltimo.error.message);
+  return {
+    ya: (rYa.data as Record<string, unknown> | null) ?? null,
+    ultima: (rUltimas.data as Record<string, unknown>[] | null)?.[0] ?? null,
+    ultimo: rUltimo.data == null ? null : Number(rUltimo.data),
+    pedido: rPed.data as Lecturas['pedido'],
+    otra: ((rOtra.data as { id: string }[] | null) ?? []).length > 0,
+  };
+}
+
+// Certificado de una empresa, leído solo si hace falta y una vez por llamada
+function cargadorCertificado(srv: SupabaseClient, empresaId: string) {
+  let guardado: Awaited<ReturnType<typeof certificadoDelBar>> | undefined;
+  const delBar = async () => {
+    guardado ??= await certificadoDelBar(srv, empresaId);
+    if (!guardado) throw new Rechazo('Falta el certificado de esta empresa: el programador lo sube en Ajustes › Programa › Estado de los bares');
+    return guardado;
+  };
+  let certificado: Certificado | null = null;
+  const cert = async () => {
+    const g = await delBar();
+    return certificado ??= await leerCertificado(g.p12, g.clave);
+  };
+  return { delBar, cert };
+}
+
 // [forzado]: venta sin internet en espera que el administrador manda tal cual (acción forzar). Ya
 // se emitió y el cliente tiene su ticket: no se comprueba la firma (la comprueba Hacienda) y, si no
 // encaja en la cadena, se guarda "fuera de cadena". Lo demás (NIF, fichero = fila, pedido) igual.
 async function registrar(cx: Contexto, fila: Record<string, unknown>, firmada: boolean,
-                         forzado: { motivo: string; avisos: string[] } | null = null) {
-  const { srv, supa, config } = cx;
+                         forzado: { motivo: string; avisos: string[] } | null = null,
+                         lecturas: Lecturas | null = null) {
+  const { srv, config } = cx;
   const nif = config.nif;
   const simulado = config.entorno !== 'pruebas' && config.entorno !== 'produccion';
   let rota = false;   // forzada fuera de cadena
@@ -231,27 +285,18 @@ async function registrar(cx: Contexto, fila: Record<string, unknown>, firmada: b
     ? comprobarFirmaEquipo(xml, nif).then((v) => ({ v }), (e) => ({ e }))
     : null;
 
-  // Consultas que no dependen unas de otras: todas a la vez desde el principio (antes iban una
-  // detrás de otra). Se usan más abajo, en el mismo orden de comprobación que antes; la firma del equipo
-  // se va comprobando mientras tanto.
+  // Lo que hay que leer (si no llegó ya en una sola consulta), a la vez que se comprueba la firma.
+  // Se usa más abajo, en el mismo orden de comprobación que antes.
   const cadenaPedida = String(fila.cadena ?? '');
-  const [rYa, rUltimas, rUltimo, rPed, rOtra] = await Promise.all([
-    typeof fila.id === 'string'
-      ? srv.from('facturas').select().eq('id', fila.id).eq('empresa_id', config.empresa_id).maybeSingle()
-      : Promise.resolve({ data: null }),
-    supa.rpc('tbai_ultima_factura', { p_cadena: cadenaPedida }),
-    supa.rpc('tbai_ultimo_numero', { p_serie: String(fila.serie ?? '') }),
-    fila.pedido_id
-      ? srv.from('pedidos').select('id, empresa_id, total').eq('id', fila.pedido_id).maybeSingle()
-      : Promise.resolve({ data: null }),
-    fila.pedido_id
-      ? srv.from('facturas').select('id').eq('pedido_id', fila.pedido_id).limit(1)
-      : Promise.resolve({ data: null }),
-  ]);
-
-  cx.marca('Consultas a la base (a la vez)');
+  const pre = lecturas ?? await leerParaRegistrar(cx, fila);
+  if (!lecturas) cx.marca('Consultas a la base (a la vez)');
   // Reintento de algo ya guardado (venta sin internet que se cortó al subir): se devuelve tal cual
-  if (rYa.data) return rYa.data;
+  if (pre.ya === true) {
+    const { data: ya } = await srv.from('facturas').select().eq('id', fila.id).eq('empresa_id', config.empresa_id).maybeSingle();
+    if (ya) return ya;
+  } else if (pre.ya) {
+    return pre.ya;
+  }
 
   // 1 · El fichero dice lo mismo que la fila
   const cab = ruta(doc, 'Factura', 'CabeceraFactura');
@@ -280,9 +325,7 @@ async function registrar(cx: Contexto, fila: Record<string, unknown>, firmada: b
   // 2 · Cadena y numeración: la de la base, no la que diga el equipo
   const cadena = cadenaPedida;
   if (!cadena || !serie.startsWith(cadena)) throw new Rechazo('Serie fuera de su cadena');
-  const { data: ultimas, error: e1 } = rUltimas;
-  if (e1) throw new Error(e1.message);
-  const previa = (ultimas as Record<string, unknown>[] | null)?.[0] ?? null;
+  const previa = pre.ultima;
   const enc = ruta(doc, 'HuellaTBAI', 'EncadenamientoFacturaAnterior');
   if ((fila.anterior_id ?? null) !== (previa?.id ?? null)) {
     romper('no encadena con la última factura de la serie', Object.assign(new Error('La cadena ha cambiado'), { code: '23505' }));
@@ -299,8 +342,7 @@ async function registrar(cx: Contexto, fila: Record<string, unknown>, firmada: b
     romper('encadena con una factura que no está guardada', new Rechazo('Encadenamiento con una factura que no existe'));
   }
   if (!forzado && fecha.getTime() > Date.now() + 5 * 60_000) throw new Rechazo('Fecha en el futuro');
-  const { data: ultimo, error: e2 } = rUltimo;
-  if (e2) throw new Error(e2.message);
+  const ultimo = pre.ultimo;
   if (numero !== (Number(ultimo ?? 0) + 1)) {
     romper(`número ${numero} cuando tocaba el ${Number(ultimo ?? 0) + 1}`,
       Object.assign(new Error('La numeración ha cambiado'), { code: '23505' }));
@@ -309,10 +351,9 @@ async function registrar(cx: Contexto, fila: Record<string, unknown>, firmada: b
   // 3 · A qué corresponde: un pedido del bar sin factura, o la factura que rectifica o sustituye
   const sinConexion = fila.sin_conexion === true;
   if (fila.pedido_id) {
-    const ped = rPed.data as { id: string; empresa_id: string; total: number } | null;
+    const ped = pre.pedido;
     if (!ped || ped.empresa_id !== config.empresa_id) throw new Rechazo('El pedido no es de este bar');
-    const otra = rOtra.data as { id: string }[] | null;
-    if (otra && otra.length > 0) throw new Rechazo('Este pedido ya tiene factura');
+    if (pre.otra) throw new Rechazo('Este pedido ya tiene factura');
     if (!casi(Number(ped.total), total)) {
       // Venta sin internet ya firmada en el equipo: se guarda, pero queda apuntado
       if (!sinConexion && !forzado) throw new Rechazo(`El importe (${total}) no es el total del pedido (${ped.total})`);
@@ -427,8 +468,57 @@ Deno.serve(async (req) => {
       global: { headers: { Authorization: req.headers.get('Authorization') ?? '' } },
     });
     const srv = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
-    // Sesión y cuerpo a la vez (cada viaje al servidor cuenta en el tiempo del cobro)
-    const [{ data: usuario }, cuerpo] = await Promise.all([supa.auth.getUser(), req.json().catch(() => ({}))]);
+    const cuerpo = await req.json().catch(() => ({}));
+
+    // Cobro: todo lo que hace falta leer, en UNA consulta con la sesión de quien llama
+    // (tbai_contexto_registro, 0057). La base valida la sesión. Sin la 0057, sigue por el camino de antes.
+    if (cuerpo?.accion === 'registrar') {
+      const fila = (cuerpo.fila ?? {}) as Record<string, unknown>;
+      const uuid = (v: unknown) => (typeof v === 'string' && /^[0-9a-f-]{36}$/i.test(v) ? v : null);
+      const { data: c, error } = await supa.rpc('tbai_contexto_registro', {
+        p_cadena: String(fila.cadena ?? ''), p_serie: String(fila.serie ?? ''),
+        p_pedido: uuid(fila.pedido_id), p_id: uuid(fila.id),
+      });
+      if (!error || error.code !== 'PGRST202') {
+        marca('Sesión, rol, datos fiscales y consultas (una sola)');
+        if (error) {
+          const sinSesion = /jwt|sesi[oó]n/i.test(error.message) || String(error.code ?? '').startsWith('PGRST30');
+          return json({ error: sinSesion ? 'Sin sesión' : error.message }, sinSesion ? 401 : 400);
+        }
+        // deno-lint-ignore no-explicit-any
+        const ctx = c as any;
+        if (!ctx?.config) return json({ error: 'No se pudo leer la configuración TicketBAI' }, 400);
+        if (ctx.rol !== 'admin' && ctx.rol !== 'camarero') {
+          return json({ error: 'Solo el administrador o un camarero pueden firmar y enviar facturas' }, 403);
+        }
+        const config = { empresa_id: String(ctx.config.empresa_id), entorno: String(ctx.config.entorno),
+          nif: String(ctx.config.nif ?? '').trim().toUpperCase() };
+        const cx: Contexto = { srv, supa, usuario: String(ctx.usuario), rol: String(ctx.rol), config,
+          cert: cargadorCertificado(srv, config.empresa_id).cert, marca };
+        const lecturas: Lecturas = {
+          ya: ctx.ya_guardada === true ? true : null,
+          ultima: ctx.ultima ?? null,
+          ultimo: ctx.ultimo_numero == null ? null : Number(ctx.ultimo_numero),
+          pedido: ctx.pedido ?? null,
+          otra: ctx.pedido_con_factura === true,
+        };
+        try {
+          const guardada = await registrar(cx, fila, cuerpo.firmada === true, null, lecturas);
+          return json({ ...guardada, _tiempos: tiempos });
+        } catch (e) {
+          // deno-lint-ignore no-explicit-any
+          if ((e as any).code === '23505') return json({ error: (e as Error).message, code: '23505' }, 409);
+          if (e instanceof Rechazo) {
+            await apuntarEvento(srv, config.empresa_id, 'factura_rechazada', cx.usuario,
+              `${fila.serie ?? '?'}-${fila.numero ?? '?'}: ${e.message}`);
+            return json({ error: e.message }, 400);
+          }
+          throw e;
+        }
+      }
+    }
+
+    const { data: usuario } = await supa.auth.getUser();
     if (!usuario.user) return json({ error: 'Sin sesión' }, 401);
     marca('Comprobar la sesión');
     // Solo para que la función quede cargada mientras el camarero elige el importe: no hace nada más
@@ -447,17 +537,7 @@ Deno.serve(async (req) => {
     }
 
     // Certificado de ESTA empresa (cada bar puede tener un titular distinto), solo si hace falta
-    let guardado: Awaited<ReturnType<typeof certificadoDelBar>> | undefined;
-    const delBar = async () => {
-      guardado ??= await certificadoDelBar(srv, String(config.empresa_id));
-      if (!guardado) throw new Rechazo('Falta el certificado de esta empresa: el programador lo sube en Ajustes › Programa › Estado de los bares');
-      return guardado;
-    };
-    let certificado: Certificado | null = null;
-    const cert = async () => {
-      const g = await delBar();
-      return certificado ??= await leerCertificado(g.p12, g.clave);
-    };
+    const { delBar, cert } = cargadorCertificado(srv, String(config.empresa_id));
     const cx: Contexto = { srv, supa, usuario: usuario.user.id, rol: String(rol), config: { ...config, nif }, cert, marca };
     const puente = () => secretoIgual(req.headers.get('x-puente-secreto'), Deno.env.get('PUENTE_SECRETO'));
 

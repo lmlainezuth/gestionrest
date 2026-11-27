@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 
 import '../../core/crono_cobro.dart';
 import '../../core/servidor_despierto.dart';
@@ -257,7 +258,42 @@ class _BarraPageState extends State<BarraPage> {
       ).ignore();
 
   /// [comanda] false: no imprime aún la comanda de cocina (se imprime al confirmar el cobro).
-  Future<String> _guardarRonda({String? nombre, bool comanda = true}) async {
+  /// Guarda la ronda (y crea la cuenta si es nueva) en un solo viaje (migración 0057) y devuelve la
+  /// cuenta con los precios que pone la base: {id, total, pedido_detalle}. Sin la 0057, como antes.
+  Future<Map<String, dynamic>> _guardarRonda({String? nombre, bool comanda = true}) async {
+    try {
+      final r = await supabase.rpc('guardar_ronda_barra', params: {
+        'p_pedido': _cuenta?['id'],
+        'p_nombre': nombre,
+        'p_lineas': [
+          for (final l in _ronda)
+            {
+              'producto_id': l.producto['id'],
+              'area_id': l.producto['area_id'],
+              'descripcion': l.nombre,
+              'cantidad': l.cantidad,
+              'precio_unitario': l.precio,
+              'modificadores': [for (final m in l.mods) m['id']],
+              'estado_cocina': _areas[l.producto['area_id']] == 'Cocina' ? 'pendiente' : 'servido',
+              'curso': 'ya',
+            },
+        ],
+      });
+      if (_ronda.isNotEmpty && comanda) _comandaCocina(_cuenta?['nombre_llevar'] as String? ?? nombre ?? 'Barra');
+      return Map<String, dynamic>.from(r as Map);
+    } on PostgrestException catch (e) {
+      if (e.code != 'PGRST202') rethrow; // la función no existe todavía: como antes
+    }
+    final id = await _guardarRondaAntes(nombre: nombre, comanda: comanda);
+    return Map<String, dynamic>.from(await supabase
+        .from('pedidos')
+        .select('id, total, pedido_detalle(id, descripcion, cantidad, precio_unitario, tipo_iva, estado_cocina)')
+        .eq('id', id)
+        .single());
+  }
+
+  /// Como se guardaba antes de la 0057 (tres viajes).
+  Future<String> _guardarRondaAntes({String? nombre, bool comanda = true}) async {
     var id = _cuenta?['id'] as String?;
     if (id == null) {
       final p = await supabase
@@ -302,11 +338,12 @@ class _BarraPageState extends State<BarraPage> {
     final eraNueva = _cuenta == null;
     CronoCobro.empezar();
     try {
-      final String id;
+      final Map<String, dynamic> pedido;
       try {
-        // Venta rápida nueva: la comanda de cocina sale al cobrar, no antes (por si se cancela)
-        id = await _guardarRonda(comanda: !eraNueva);
-        CronoCobro.marca('Guardar la cuenta');
+        // Venta rápida nueva: la comanda de cocina sale al cobrar, no antes (por si se cancela).
+        // Devuelve ya la cuenta con los precios de la base: no hace falta volver a leerla
+        pedido = await _guardarRonda(comanda: !eraNueva);
+        CronoCobro.marca('Guardar y leer la cuenta');
       } catch (e) {
         // Se ha caído internet: venta rápida firmada en el equipo
         if (esErrorDeRed(e)) {
@@ -318,12 +355,7 @@ class _BarraPageState extends State<BarraPage> {
         }
         rethrow;
       }
-      final pedido = await supabase
-          .from('pedidos')
-          .select('id, total, pedido_detalle(id, descripcion, cantidad, precio_unitario, tipo_iva, estado_cocina)')
-          .eq('id', id)
-          .single();
-      CronoCobro.marca('Leer la cuenta');
+      final id = pedido['id'] as String;
       if (!mounted) return;
       final factura = await showDialog<Map<String, dynamic>>(
         context: context,

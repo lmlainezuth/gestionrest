@@ -172,6 +172,23 @@ la app nueva. Para saber antes cuántos cambiará, la consulta comentada al prin
 | C.10 | Vuelve a encender «Usa pantalla de cocina» | Cocina vuelve a aparecer y los platos nuevos vuelven a llegar |
 | C.11 | Después de C.2 a C.7: Números › Anulaciones y Números › Seguridad | **Nada nuevo**: pasar a servido no es una anulación ni un evento de seguridad. **(SQL)** `select count(*) from registro_anulaciones where momento > now() - interval '1 hour';` → solo lo que anulaste tú a propósito |
 
+## Cobro rápido (0057)
+
+Antes: la `0057` en el SQL Editor y, **después**, desplegar `ticketbai` e instalar la app nueva. Entra como
+administrador: el aviso del cronómetro sale tras cada cobro.
+
+| # | Qué hacer | Qué tiene que pasar |
+|---|---|---|
+| R.1 | Barra: venta rápida nueva y cobrar | Salen «Guardar y leer la cuenta» (ya no «Leer la cuenta» aparte), «Caja, turno, datos fiscales y número (ya leídos)» y, bajo el servidor, «Sesión, rol, datos fiscales y consultas (una sola)». Total cerca de 1 s |
+| R.2 | Barra: cuenta con nombre ya abierta, añade algo y cobra | Cobra con el total correcto (precios de la carta, no los del equipo) |
+| R.3 | Barra: plato con extras | El precio incluye los extras, como antes |
+| R.4 | Ticket **con NIF** | Se cobra bien (la numeración con NIF se lee al cobrar: «Última factura y número» sin «ya leídos») |
+| R.5 | Cobro desde una **mesa** y de una **cuenta dividida** | Se cobran bien; el cronómetro también sale |
+| R.6 | Dos equipos cobrando a la vez en la misma caja | Los dos tickets salen con números seguidos; si coinciden, uno tarda algo más (vuelve a numerar solo) |
+| R.7 | Abre la ventana de cobro, espera más de 1 minuto y cobra | Cobra bien (lo vuelve a leer todo) |
+| R.8 | **(SQL)** `select prosecdef from pg_proc where proname = 'guardar_ronda_barra';` | `false`: guarda la ronda con los permisos de quien llama, no con los del servidor |
+| R.9 | Venta sin internet que se sube al volver la red | Se sube y se envía como antes |
+
 ---
 
 # Parte 2 · Pruebas por API (script)

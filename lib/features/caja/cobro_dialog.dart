@@ -7,6 +7,7 @@ import '../../core/tema.dart';
 import '../../main.dart';
 import '../ajustes/clientes_tab.dart' show editarCliente;
 import '../carta/colores.dart' show leerImporte;
+import '../ticketbai/cadena_equipo.dart';
 import '../ticketbai/facturacion_service.dart';
 import '../ticketbai/modelos.dart';
 import '../ticketbai/tbai_proveedor.dart' show precalentarFirma;
@@ -58,6 +59,8 @@ class _CobroDialogState extends State<CobroDialog> {
   Map<String, dynamic>? _cliente;
   bool _conNif = false;
   bool _cobrando = false;
+  Future<_Previo>? _previo; // lecturas adelantadas al abrir la ventana
+  DateTime? _previoEn;
   String? _error;
 
   // Teclado de números de la propia ventana: escribe en la casilla elegida
@@ -132,6 +135,9 @@ class _CobroDialogState extends State<CobroDialog> {
     precalentarFirma(); // por si se cobra desde mesas sin haber pasado por Barra
     // La función que guarda la factura, cargada mientras el camarero elige importe y forma de pago
     ServidorDespierto.ya();
+    // Y lo que hay que leer para cobrar, también ya (si falla, se lee al pulsar Cobrar)
+    _previo = _leerPrevio()..ignore();
+    _previoEn = DateTime.now();
     _ponerImporte(_restante);
   }
 
@@ -241,21 +247,24 @@ class _CobroDialogState extends State<CobroDialog> {
     });
     CronoCobro.reanudar();
     try {
-      // Caja, turno, factura previa y datos fiscales a la vez: un viaje en vez de cuatro
-      final idCaja = CajaService.ultimaCajaId;
-      final r = await Future.wait<dynamic>([
-        CajaService.caja(),
-        idCaja == null ? Future<Map<String, dynamic>?>.value() : CajaService.turnoAbierto(idCaja),
-        supabase.from('facturas').select().eq('pedido_id', widget.pedido['id']).maybeSingle(),
-        FacturacionService.leerConfig(),
-      ]);
-      final caja = r[0] as Map<String, dynamic>;
-      var turno = r[1] as Map<String, dynamic>?;
-      final yaEmitida = r[2] as Map<String, dynamic>?;
-      final config = r[3] as Map<String, dynamic>;
-      // Primera vez en este equipo (o cambió la caja): el turno se pide ahora
-      if (idCaja != caja['id']) turno = await CajaService.turnoAbierto(caja['id'] as String);
-      CronoCobro.marca('Caja, turno, factura previa y datos fiscales');
+      // Lo leído al abrir la ventana, si es de hace menos de un minuto; si no (o falló), ahora.
+      // Se usa una sola vez: un reintento vuelve a leerlo todo.
+      _Previo? p;
+      final adelantado = _previo != null && DateTime.now().difference(_previoEn!) < const Duration(minutes: 1);
+      if (adelantado) {
+        try {
+          p = await _previo;
+        } catch (_) {}
+      }
+      _previo = null;
+      p ??= await _leerPrevio();
+      final caja = p.caja;
+      var turno = p.turno;
+      final yaEmitida = p.yaEmitida;
+      final config = p.config;
+      CronoCobro.marca(adelantado
+          ? 'Caja, turno, datos fiscales y número (ya leídos)'
+          : 'Caja, turno, factura previa y datos fiscales');
       if (turno == null) {
         // Caja cerrada: se abre aquí mismo y se sigue cobrando
         if (!mounted || !await abrirCajaRapida(context)) throw 'Para cobrar hay que abrir la caja';
@@ -273,6 +282,7 @@ class _CobroDialogState extends State<CobroDialog> {
             enviarEnSegundoPlano: true,
             configLeida: config,
             cajaLeida: caja,
+            numeracionLeida: p.numeracion,
           );
       // Pagos, pedido pagado y mesa libre en una sola transacción (migración 0036): si falla,
       // no queda nada a medias; si se reintenta y ya estaba cobrado, no repite los pagos
@@ -310,6 +320,37 @@ class _CobroDialogState extends State<CobroDialog> {
         _error = '$e';
       });
     }
+  }
+
+  /// Lo que hay que leer para cobrar: caja, turno, si la cuenta ya tenía factura, datos fiscales y
+  /// la numeración del ticket. Se lanza al abrir la ventana, mientras el camarero elige.
+  Future<_Previo> _leerPrevio() async {
+    final idCaja = CajaService.ultimaCajaId;
+    final r = await Future.wait<dynamic>([
+      CajaService.caja(),
+      idCaja == null ? Future<Map<String, dynamic>?>.value() : CajaService.turnoAbierto(idCaja),
+      supabase.from('facturas').select().eq('pedido_id', widget.pedido['id']).maybeSingle(),
+      FacturacionService.leerConfig(),
+      CadenaEquipo.serie(),
+    ]);
+    final caja = r[0] as Map<String, dynamic>;
+    var turno = r[1] as Map<String, dynamic>?;
+    // Primera vez en este equipo (o cambió la caja): el turno se pide ahora
+    final cadena = (r[4] as String?) ?? caja['serie_factura'] as String;
+    final n = await Future.wait<dynamic>([
+      if (idCaja != caja['id']) CajaService.turnoAbierto(caja['id'] as String) else Future.value(turno),
+      // Numeración del ticket sin NIF (con NIF la serie es otra y se lee al cobrar)
+      supabase.rpc('tbai_ultima_factura', params: {'p_cadena': cadena}),
+      supabase.rpc('tbai_ultimo_numero', params: {'p_serie': cadena}),
+    ]);
+    turno = n[0] as Map<String, dynamic>?;
+    return _Previo(
+      caja: caja,
+      turno: turno,
+      yaEmitida: r[2] as Map<String, dynamic>?,
+      config: r[3] as Map<String, dynamic>,
+      numeracion: NumeracionLeida(cadena, cadena, List<Map<String, dynamic>>.from(n[1] as List), (n[2] as num?)?.toInt()),
+    );
   }
 
   @override
@@ -603,4 +644,14 @@ class _TecladoCobro extends StatelessWidget {
       ]),
     ]);
   }
+}
+
+/// Lecturas para cobrar hechas mientras el camarero elegía el importe.
+class _Previo {
+  const _Previo({required this.caja, required this.turno, required this.yaEmitida, required this.config, required this.numeracion});
+  final Map<String, dynamic> caja;
+  final Map<String, dynamic>? turno;
+  final Map<String, dynamic>? yaEmitida;
+  final Map<String, dynamic> config;
+  final NumeracionLeida numeracion;
 }
