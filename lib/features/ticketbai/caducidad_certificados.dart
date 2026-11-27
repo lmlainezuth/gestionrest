@@ -45,21 +45,14 @@ class CaducidadCertificados {
     }
   }
 
-  /// Pregunta al servidor por su certificado (como mucho cada 12 h) y lo apunta.
+  /// Pide al servidor que compruebe su certificado (como mucho cada 12 h). La caducidad la apunta
+  /// el propio servidor en tbai_certificados (migración 0053): la app no puede escribir esa fila.
   static Future<void> registrarServidor() async {
     final ahora = DateTime.now();
     if (_servidorMirado != null && ahora.difference(_servidorMirado!) < const Duration(hours: 12)) return;
     _servidorMirado = ahora;
     try {
-      final r = await probarCertificado();
-      final caduca = DateTime.tryParse('${r['caduca']}');
-      if (r['error'] != null || caduca == null) return; // sin certificado en el servidor
-      await supabase.from('tbai_certificados').upsert({
-        'origen': 'servidor',
-        'titular': r['titular'],
-        'caduca': caduca.toUtc().toIso8601String(),
-        'actualizado_en': ahora.toUtc().toIso8601String(),
-      }, onConflict: 'empresa_id,origen');
+      await probarCertificado();
     } catch (_) {}
   }
 

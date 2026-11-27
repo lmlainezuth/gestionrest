@@ -13,6 +13,10 @@ const json = (cuerpo: unknown, estado = 200) =>
     headers: { ...cors, "Content-Type": "application/json" },
   });
 
+// Topes de altas por bar (bloque 5 del informe de seguridad)
+const MAX_MIEMBROS = 60;
+const MAX_ALTAS_HORA = 10;
+
 // Misma regla que la app (lib/features/auth/pin.dart)
 const claveDePin = (pin: string, correo: string) => `GRpin-${pin}-${correo.split("@")[0]}`;
 
@@ -124,6 +128,18 @@ Deno.serve(async (req) => {
   const rol = String(b.rol ?? "");
   if (!nombre) return json({ error: "Escribe el nombre" }, 400);
   if (!["admin", "camarero", "cocinero"].includes(rol)) return json({ error: "Rol no válido" }, 400);
+  // Topes (todos los bares comparten la base y las cuentas): 60 personas por bar y 10 altas por hora
+  const { count: miembros } = await admin.from("empresa_usuarios").select("usuario_id", { count: "exact", head: true })
+    .eq("empresa_id", empresa);
+  if ((miembros ?? 0) >= MAX_MIEMBROS) {
+    return json({ error: `Este bar ya tiene ${MAX_MIEMBROS} usuarios: quita antes a quien ya no trabaje` }, 400);
+  }
+  const { count: altas } = await admin.from("eventos_seguridad").select("id", { count: "exact", head: true })
+    .eq("empresa_id", empresa).eq("tipo", "usuario_creado").gte("momento", new Date(Date.now() - 3600_000).toISOString());
+  if ((altas ?? 0) >= MAX_ALTAS_HORA) {
+    await apuntarEvento(String(empresa), "altas_limitadas", user.id, `Más de ${MAX_ALTAS_HORA} altas en una hora`);
+    return json({ error: "Demasiadas altas seguidas: espera un rato" }, 429);
+  }
 
   const correo = `u${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}@gestionrest.local`;
   const { data, error } = await admin.auth.admin.createUser({
@@ -143,5 +159,6 @@ Deno.serve(async (req) => {
     await admin.auth.admin.deleteUser(data.user.id);
     return json({ error: `No se pudo crear el usuario: ${(e1 ?? e2)!.message}` }, 400);
   }
+  await apuntarEvento(String(empresa), "usuario_creado", user.id, `Alta de ${nombre} (${rol})`);
   return json({ id: data.user.id });
 });

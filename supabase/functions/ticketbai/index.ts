@@ -376,6 +376,16 @@ async function registrar(cx: Contexto, fila: Record<string, unknown>, firmada: b
   return data;
 }
 
+// Compara un secreto sin que el tiempo de respuesta diga cuántos caracteres acertó
+async function secretoIgual(dado: string | null, esperado: string | undefined): Promise<boolean> {
+  if (!dado || !esperado) return false;
+  const h = async (s: string) => new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)));
+  const [a, b] = await Promise.all([h(dado), h(esperado)]);
+  let d = 0;
+  for (let i = 0; i < a.length; i++) d |= a[i] ^ b[i];
+  return d === 0;
+}
+
 // Apunta un intento sospechoso en eventos_seguridad (panel Seguridad y aviso diario). Si falla, sigue.
 async function apuntarEvento(srv: SupabaseClient, empresa: string, tipo: string, usuario: string, detalle: string) {
   try {
@@ -416,16 +426,18 @@ Deno.serve(async (req) => {
     };
     const cx: Contexto = { srv, supa, usuario: usuario.user.id, rol: String(rol), config: { ...config, nif }, cert };
     const cuerpo = await req.json();
-    const puente = () => {
-      const secreto = Deno.env.get('PUENTE_SECRETO');
-      return !!secreto && req.headers.get('x-puente-secreto') === secreto;
-    };
+    const puente = () => secretoIgual(req.headers.get('x-puente-secreto'), Deno.env.get('PUENTE_SECRETO'));
 
     if (cuerpo.accion === 'probar') {
       const c = await cert();
       if (!certificadoDelNif(c.titular, nif)) {
         return json({ error: `El certificado (${c.titular}) no es del NIF de la empresa (${nif || 'sin NIF'})` });
       }
+      // La caducidad del certificado del servidor la apunta el servidor (aviso del panel, 0053)
+      await srv.from('tbai_certificados').upsert({
+        empresa_id: config.empresa_id, origen: 'servidor', titular: c.titular, caduca: c.caduca,
+        actualizado_en: new Date().toISOString(),
+      }, { onConflict: 'empresa_id,origen' });
       return json({ ok: true, titular: c.titular, caduca: c.caduca, entorno: config.entorno, secreto: nombreSecreto });
     }
 
@@ -549,7 +561,7 @@ Deno.serve(async (req) => {
 
     if (cuerpo.accion === 'preparar_envio' || cuerpo.accion === 'resultado_envio') {
       // Solo el servicio puente de Netlify (conoce el secreto compartido), en nombre del usuario
-      if (!puente()) return json({ error: 'No autorizado' }, 403);
+      if (!(await puente())) return json({ error: 'No autorizado' }, 403);
       const tabla = TABLA[String(cuerpo.tabla)];
       if (!tabla) return json({ error: 'Tabla no válida' }, 400);
       // Anular y subsanar en Hacienda: solo el administrador

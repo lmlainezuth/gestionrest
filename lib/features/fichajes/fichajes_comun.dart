@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -80,11 +81,21 @@ class FichajeError implements Exception {
 }
 
 /// Fichar desde el TPV. Sin internet se guarda en el equipo con su hora y se sube después
-/// (el PIN se comprueba al subirlo).
+/// (el PIN se comprueba al subirlo). El PIN de lo guardado va en el almacén seguro del sistema,
+/// nunca en claro en la cola (es también la clave para entrar en la app).
 class FichajeService {
   static const _kCola = 'fichajes_cola';
   static bool _iniciado = false, _subiendo = false;
   static String? ultimoError;
+
+  // Igual que el certificado del equipo: llave AES del Android Keystore (algunos TPV no crean RSA)
+  static final _seguro = FlutterSecureStorage(
+    aOptions: AndroidOptions(
+      keyCipherAlgorithm: KeyCipherAlgorithm.AES_GCM_NoPadding,
+      storageCipherAlgorithm: StorageCipherAlgorithm.AES_GCM_NoPadding,
+    ),
+  );
+  static String _clavePin(String id) => 'fichaje_pin_$id';
 
   static void iniciar() {
     if (_iniciado) return;
@@ -92,7 +103,27 @@ class FichajeService {
     Conexion.enLinea.addListener(() {
       if (Conexion.enLinea.value) subir();
     });
-    subir();
+    _sacarPinesEnClaro().whenComplete(subir);
+  }
+
+  /// Colas guardadas por versiones anteriores, con el PIN en claro: el PIN pasa al almacén seguro.
+  static Future<void> _sacarPinesEnClaro() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final cola = await pendientes();
+      var cambiada = false;
+      for (final f in cola) {
+        if (f['p_pin'] == null) continue;
+        final id = (f['id'] as String?) ?? '${DateTime.now().microsecondsSinceEpoch}-${cola.indexOf(f)}';
+        await _seguro.write(key: _clavePin(id), value: f['p_pin'] as String);
+        f['id'] = id;
+        f.remove('p_pin');
+        cambiada = true;
+      }
+      if (cambiada) await p.setString(_kCola, jsonEncode(cola));
+    } catch (_) {
+      // Sin almacén seguro: se quedan como estaban y se suben igual
+    }
   }
 
   static String _mensaje(Object e) => e is PostgrestException ? e.message : '$e';
@@ -123,10 +154,17 @@ class FichajeService {
       if (!esErrorDeRed(e)) throw FichajeError(_mensaje(e));
       final p = await SharedPreferences.getInstance();
       final cola = await pendientes();
+      final id = '${DateTime.now().microsecondsSinceEpoch}';
+      try {
+        await _seguro.write(key: _clavePin(id), value: pin);
+      } catch (_) {
+        throw FichajeError('Este equipo no puede guardar el fichaje sin internet de forma segura. '
+            'Ficha cuando vuelva la conexión o en otro equipo');
+      }
       cola.add({
+        'id': id,
         'p_empresa': empresa,
         'p_usuario': usuario,
-        'p_pin': pin,
         'p_tipo': tipo,
         'p_momento': DateTime.now().toUtc().toIso8601String(),
       });
@@ -150,9 +188,17 @@ class FichajeService {
       final p = await SharedPreferences.getInstance();
       var cola = await pendientes();
       while (cola.isNotEmpty) {
+        final f = cola.first;
+        final id = f['id'] as String?;
+        final params = Map<String, dynamic>.from(f)..remove('id');
         try {
-          final r = Map<String, dynamic>.from(await supabase.rpc('fichar', params: cola.first) as Map);
-          if (r['error'] != null) ultimoError = 'Fichaje sin internet rechazado: ${r['error']}';
+          params['p_pin'] ??= id == null ? null : await _seguro.read(key: _clavePin(id));
+          if (params['p_pin'] == null) {
+            ultimoError = 'Fichaje sin internet sin su PIN guardado: no se puede subir';
+          } else {
+            final r = Map<String, dynamic>.from(await supabase.rpc('fichar', params: params) as Map);
+            if (r['error'] != null) ultimoError = 'Fichaje sin internet rechazado: ${r['error']}';
+          }
         } catch (e) {
           if (esErrorDeRed(e)) break;
           if (esBloqueo(e)) {
@@ -163,6 +209,7 @@ class FichajeService {
         }
         cola = cola.sublist(1);
         await p.setString(_kCola, jsonEncode(cola));
+        if (id != null) await _seguro.delete(key: _clavePin(id)).catchError((_) {});
       }
     } finally {
       _subiendo = false;

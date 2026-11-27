@@ -21,6 +21,16 @@ const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-copia-secreto",
 };
+// Compara un secreto sin que el tiempo de respuesta diga cuántos caracteres acertó
+async function secretoIgual(dado: string | null, esperado: string | undefined): Promise<boolean> {
+  if (!dado || !esperado) return false;
+  const h = async (s: string) => new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)));
+  const [a, b] = await Promise.all([h(dado), h(esperado)]);
+  let d = 0;
+  for (let i = 0; i < a.length; i++) d |= a[i] ^ b[i];
+  return d === 0;
+}
+
 const json = (cuerpo: unknown, estado = 200) =>
   new Response(JSON.stringify(cuerpo), { status: estado, headers: { ...cors, "Content-Type": "application/json" } });
 
@@ -312,8 +322,7 @@ Deno.serve(async (req) => {
 
   // ¿Quién llama? pg_cron (secreto) → todas; administrador → la suya
   let empresas: { id: string; nombre: string }[];
-  const secreto = Deno.env.get("COPIA_SECRETO");
-  const automatica = !!secreto && req.headers.get("x-copia-secreto") === secreto;
+  const automatica = await secretoIgual(req.headers.get("x-copia-secreto"), Deno.env.get("COPIA_SECRETO"));
   if (automatica) {
     const { data } = await db.from("empresa").select("id, nombre");
     empresas = data ?? [];
@@ -327,6 +336,13 @@ Deno.serve(async (req) => {
     if (yo?.rol !== "admin" || !yo.activo) return json({ error: "Solo el administrador puede hacer copias" }, 403);
     const { data } = await db.from("empresa").select("id, nombre").eq("id", perfil!.empresa_actual).single();
     empresas = data ? [data] : [];
+    // Copia a mano: como mucho una cada 30 minutos por bar (la espera la guarda el servidor, 0053)
+    if (data) {
+      const { data: puede, error: errLimite } = await db.rpc("reclamar_accion_manual",
+        { p_empresa: data.id, p_accion: "copia", p_minutos: 30 });
+      if (errLimite) return json({ error: errLimite.message }, 500);
+      if (puede !== true) return json({ error: "Ya se hizo una copia hace poco: espera media hora" }, 429);
+    }
   }
   // Un administrador solo rehace el mes en curso o el anterior: los cerrados no se reescriben a mano
   // (y no se llena la cuenta de Drive compartida con meses inventados)

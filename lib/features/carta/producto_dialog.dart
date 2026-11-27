@@ -73,6 +73,8 @@ class _ProductoDialogState extends State<ProductoDialog> {
     setState(() => _subiendo = true);
     try {
       final bytes = await f.readAsBytes();
+      // El almacén de fotos admite 2 MB como mucho (migración 0053)
+      if (bytes.length > 2 * 1024 * 1024) throw 'la imagen pesa más de 2 MB: redúcela antes de subirla';
       // Cada bar sube a su carpeta: la base solo deja tocar las imágenes de la carpeta propia
       final empresa = Perfil.cache?.empresaId;
       if (empresa == null) throw 'no hay empresa elegida';

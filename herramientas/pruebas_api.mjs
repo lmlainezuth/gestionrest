@@ -1,10 +1,12 @@
-// Pruebas de API de la tanda de seguridad (bloques 1 a 4 y ventas en espera). Ver PRUEBAS.md.
+// Pruebas de API de la tanda de seguridad (bloques 1 a 5 y ventas en espera). Ver PRUEBAS.md.
 // Solo para el ENTORNO DE PRUEBAS: se niega a seguir si el bar está en producción.
 // No lleva claves ni PIN dentro: todo se lee de variables de entorno (o se pregunta).
 //
 //   node herramientas/pruebas_api.mjs                  pruebas normales
 //   node herramientas/pruebas_api.mjs --bloqueos       además, bloqueo de un empleado y PIN simultáneos
 //   node herramientas/pruebas_api.mjs --bloqueo-bar    además, bloqueo de todo el bar (15 minutos sin PIN)
+//   node herramientas/pruebas_api.mjs --esperas        además, resumen y copia manuales dos veces seguidas
+//                                                      (manda un correo de resumen y hace una copia en Drive)
 //
 // Variables (las * son obligatorias):
 //   GR_URL*            dirección del proyecto Supabase de pruebas (https://xxxx.supabase.co)
@@ -292,6 +294,60 @@ await prueba('forzar siendo camarero: 403', async () =>
   falla(await funcion('ticketbai', { accion: 'forzar', id: crypto.randomUUID(), motivo: 'motivo de prueba largo' }, cam)));
 await prueba('forzar sin motivo (administrador): 400', async () =>
   falla(await funcion('ticketbai', { accion: 'forzar', id: crypto.randomUUID(), motivo: 'corto' }, adm), 'motivo'));
+
+// =====================================================================
+console.log('\n— Bloque 5 · Resto —');
+await prueba('Certificados: el camarero no lee la tabla', async () => {
+  const r = await tabla('GET', 'tbai_certificados', '?select=origen,titular', undefined, cam);
+  return { ok: Array.isArray(r.datos) && r.datos.length === 0, detalle: `${r.datos?.length ?? r.texto} filas` };
+});
+await prueba('Certificados: nadie escribe la fila del servidor desde la app', async () =>
+  denegado(await tabla('POST', 'tbai_certificados', '?on_conflict=empresa_id,origen',
+    { origen: 'servidor', caduca: '2099-01-01T00:00:00Z' }, adm, 'resolution=merge-duplicates,return=representation')));
+await prueba('Fichar con una hora de hace 3 días: fuera de plazo', async () => {
+  const hace3 = new Date(Date.now() - 3 * 86400_000).toISOString();
+  return falla(await rpc('fichar', { p_empresa: EMPRESA, p_usuario: env.GR_CAMARERO_ID, p_pin: camPin, p_tipo: 'entrada', p_momento: hace3 }), '48 horas');
+});
+await prueba('PIN de alguien que no es del bar: responde igual que un PIN incorrecto', async () => {
+  const r = await rpc('correo_pin', { p_empresa: EMPRESA, p_usuario: crypto.randomUUID(), p_pin: '123456' });
+  return { ok: r.status === 200 && r.datos == null, detalle: `${r.status} ${r.texto.slice(0, 80)}` };
+});
+await prueba('La app no puede llamar a reclamar_accion_manual', async () =>
+  denegado(await rpc('reclamar_accion_manual', { p_empresa: EMPRESA, p_accion: 'resumen', p_minutos: 0 }, adm)));
+await prueba('La app no puede llamar a alertas_resumen', async () =>
+  denegado(await rpc('alertas_resumen', { p_desde: new Date().toISOString() }, adm)));
+await prueba('Fotos: un fichero HTML no se puede subir', async () => {
+  const r = await fetch(`${URL_SB}/storage/v1/object/productos/${EMPRESA}/prueba-${Date.now()}.html`, {
+    method: 'POST', headers: { apikey: KEY, Authorization: `Bearer ${adm}`, 'Content-Type': 'text/html' }, body: '<p>prueba</p>',
+  });
+  const t = await r.text();
+  return { ok: r.status >= 400, detalle: `${r.status} ${t.slice(0, 120)}` };
+});
+await prueba('Fotos: una imagen de más de 2 MB no se puede subir', async () => {
+  const r = await fetch(`${URL_SB}/storage/v1/object/productos/${EMPRESA}/grande-${Date.now()}.png`, {
+    method: 'POST', headers: { apikey: KEY, Authorization: `Bearer ${adm}`, 'Content-Type': 'image/png' },
+    body: new Uint8Array(2 * 1024 * 1024 + 10),
+  });
+  const t = await r.text();
+  return { ok: r.status >= 400, detalle: `${r.status} ${t.slice(0, 120)}` };
+});
+if (args.has('--esperas')) {
+  await prueba('Resumen diario a mano dos veces seguidas: la segunda, 429', async () => {
+    const a = await funcion('resumen-diario', {}, adm);
+    if (a.status === 400) return { ok: false, detalle: 'pon antes un correo de resumen en el bar de pruebas' };
+    const b = await funcion('resumen-diario', {}, adm);
+    return { ok: b.status === 429, detalle: `1ª ${a.status}, 2ª ${b.status}` };
+  });
+  await prueba('Resumen diario a mano, dos a la vez: solo pasa uno', async () => {
+    const [a, b] = await Promise.all([funcion('resumen-diario', {}, adm), funcion('resumen-diario', {}, adm)]);
+    return { ok: [a.status, b.status].filter((s) => s === 200).length <= 1, detalle: `${a.status} y ${b.status}` };
+  });
+  await prueba('Copia mensual a mano dos veces seguidas: la segunda, 429', async () => {
+    const a = await funcion('copia-mensual', {}, adm);
+    const b = await funcion('copia-mensual', {}, adm);
+    return { ok: b.status === 429, detalle: `1ª ${a.status}, 2ª ${b.status}` };
+  });
+}
 
 // =====================================================================
 if (args.has('--bloqueos')) {

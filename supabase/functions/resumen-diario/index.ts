@@ -3,7 +3,8 @@
 //
 // La llaman: pg_cron cada mañana (cabecera x-copia-secreto) → todas las empresas con correo_resumen;
 //            el administrador desde la app ("Enviar prueba") → la suya.
-// Secretos: RESEND_API_KEY, COPIA_SECRETO; opcional RESUMEN_DE ("Bar Itsasoa <avisos@tudominio.com>")
+// Secretos: RESEND_API_KEY, RESUMEN_SECRETO (el de su cron, cabecera x-copia-secreto); opcional
+// RESUMEN_DE ("Bar Itsasoa <avisos@tudominio.com>")
 import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2.50.3";
 
 const cors = {
@@ -12,6 +13,16 @@ const cors = {
 };
 const json = (c: unknown, s = 200) =>
   new Response(JSON.stringify(c), { status: s, headers: { ...cors, "Content-Type": "application/json" } });
+
+// Compara un secreto sin que el tiempo de respuesta diga cuántos caracteres acertó
+async function secretoIgual(dado: string | null, esperado: string | undefined): Promise<boolean> {
+  if (!dado || !esperado) return false;
+  const h = async (s: string) => new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)));
+  const [a, b] = await Promise.all([h(dado), h(esperado)]);
+  let d = 0;
+  for (let i = 0; i < a.length; i++) d |= a[i] ^ b[i];
+  return d === 0;
+}
 
 const eur = (v: number) => v.toLocaleString("es-ES", { style: "currency", currency: "EUR" });
 const esc = (s: unknown) => String(s ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
@@ -107,8 +118,7 @@ Deno.serve(async (req) => {
   const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
   let empresas: { id: string; nombre: string; correo_resumen: string | null }[];
-  const secreto = Deno.env.get("COPIA_SECRETO");
-  if (secreto && req.headers.get("x-copia-secreto") === secreto) {
+  if (await secretoIgual(req.headers.get("x-copia-secreto"), Deno.env.get("RESUMEN_SECRETO"))) {
     const { data } = await db.from("empresa").select("id, nombre, correo_resumen").not("correo_resumen", "is", null);
     empresas = data ?? [];
   } else {
@@ -119,15 +129,16 @@ Deno.serve(async (req) => {
     const { data: yo } = await db.from("empresa_usuarios").select("rol, activo")
       .eq("empresa_id", perfil?.empresa_actual).eq("usuario_id", user.id).maybeSingle();
     if (yo?.rol !== "admin" || !yo.activo) return json({ error: "Solo el administrador" }, 403);
-    const { data } = await db.from("empresa").select("id, nombre, correo_resumen, resumen_manual_en")
+    const { data } = await db.from("empresa").select("id, nombre, correo_resumen")
       .eq("id", perfil!.empresa_actual).single();
     if (!data?.correo_resumen) return json({ error: "Pon antes el correo del resumen" }, 400);
-    // El envío lo paga y lo firma la plataforma: a mano, como mucho uno cada 10 minutos por bar
-    const ultimo = data.resumen_manual_en ? new Date(data.resumen_manual_en).getTime() : 0;
-    if (Date.now() - ultimo < 10 * 60 * 1000) {
-      return json({ error: "Ya se envió un resumen hace poco: espera unos minutos" }, 429);
-    }
-    await db.from("empresa").update({ resumen_manual_en: new Date().toISOString() }).eq("id", data.id);
+    // El envío lo paga y lo firma la plataforma: a mano, como mucho uno cada 10 minutos por bar. La
+    // espera la guarda el servidor (migración 0053): el administrador no la puede borrar, y dos
+    // peticiones a la vez no pasan las dos
+    const { data: puede, error: errLimite } = await db.rpc("reclamar_accion_manual",
+      { p_empresa: data.id, p_accion: "resumen", p_minutos: 10 });
+    if (errLimite) return json({ error: errLimite.message }, 500);
+    if (puede !== true) return json({ error: "Ya se envió un resumen hace poco: espera unos minutos" }, 429);
     empresas = [data];
   }
 

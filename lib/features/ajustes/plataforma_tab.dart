@@ -39,6 +39,8 @@ class _PlataformaTabState extends State<PlataformaTab> {
     'miembro_cambiado': 'Cambio de rol, permisos o baja',
     'venta_en_espera': 'Venta sin internet en espera',
     'factura_forzada': 'Factura forzada por el administrador',
+    'usuario_creado': 'Alta de usuario',
+    'altas_limitadas': 'Altas de usuarios frenadas',
   };
 
   @override

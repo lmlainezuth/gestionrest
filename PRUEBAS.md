@@ -1,4 +1,4 @@
-# Pruebas de la tanda de seguridad (bloques 1 a 4 y ventas en espera)
+# Pruebas de la tanda de seguridad (bloques 1 a 5 y ventas en espera)
 
 Todo esto se hace **en el entorno de pruebas**: un proyecto de Supabase de pruebas, o el de siempre con el bar
 en `tbai_config.entorno = 'pruebas'`, y nunca con datos de clientes reales. El script de API se niega a
@@ -12,7 +12,11 @@ seguir si el bar está en producción.
    `supabase functions deploy alertas-seguridad --no-verify-jwt`.
 2. Netlify (puente y web) a la vez que las funciones: el puente nuevo no funciona con la función antigua.
 3. La app nueva en **todos** los equipos de prueba.
-4. En el SQL Editor, por orden: `0048`, `0049`, `0050`, `0051` y `0052`.
+4. En el SQL Editor, por orden: `0048`, `0049`, `0050`, `0051`, `0052` y `0053`. La `0053` va
+   **antes** de desplegar las funciones del bloque 5 (`resumen-diario`, `copia-mensual`,
+   `alertas-seguridad`, `ticketbai` y `crear-usuario`).
+   - Bloque 5: crea los secretos `RESUMEN_SECRETO` y `ALERTAS_SECRETO` y vuelve a programar sus
+     dos trabajos de cron con el bloque comentado al final de la `0053`.
 5. `supabase/datos/comprobar_migraciones.sql` → tiene que salir «✔ Están todas».
 6. Si al ejecutar la `0048` salió «pg_cron no está activado»: actívalo en Database › Extensions y vuelve
    a ejecutar su último bloque.
@@ -111,6 +115,21 @@ Para provocar los rechazos hay que tocar la cola del equipo (ver Preparación). 
 | E.11 | Desde **otro equipo** o la web, como administrador: Facturas › Resolver › Enviar tal cual | Aparecen el pedido (pagado, con sus líneas), el cobro en su turno (si el turno ya estaba cerrado, además «cobro fuera de turno» en Seguridad) y la factura con su envío |
 | E.12 | Repite E.10 al día siguiente (o en el momento) | Ya no cuenta esa venta |
 
+## Bloque 5 · Resto
+
+| # | Qué hacer | Qué tiene que pasar |
+|---|---|---|
+| 5.1 | Panel de hoy como administrador (o Ajustes › Empresa › Comprobar certificado) | **(SQL)** `select origen, caduca, actualizado_en from tbai_certificados;` → la fila «servidor» con la fecha de ahora (la escribe el servidor) |
+| 5.2 | Ficha sin internet en un TPV; **(SQL o mirando el fichero)** revisa `flutter.fichajes_cola` en el equipo | La entrada lleva `id`, empresa, usuario, tipo y hora, **sin `p_pin`**. Al volver la red se sube |
+| 5.3 | Con una versión anterior de la app, ficha sin internet (queda con el PIN en claro); instala la nueva y ábrela | El PIN desaparece de `fichajes_cola` y el fichaje se sube igual |
+| 5.4 | Carta: sube una foto de más de 2 MB | «la imagen pesa más de 2 MB: redúcela antes de subirla» |
+| 5.5 | Control › Panel: «Enviar resumen» dos veces seguidas | La segunda: «Ya se envió un resumen hace poco» |
+| 5.6 | Ajustes › Copias: «Hacer copia ahora» dos veces seguidas | La segunda: «Ya se hizo una copia hace poco: espera media hora» |
+| 5.7 | Usuarios: da de alta 11 usuarios seguidos | El undécimo: «Demasiadas altas seguidas». En Seguridad, «Alta de un usuario» por cada una y «Demasiadas altas…» |
+| 5.8 | **(SQL)** `select public.tbai_asignar_serie('equipo');` en un bar en simulado con el NIF de otro bar en producción | La serie que da no se salta las que ese otro bar tiene como `facturas.cadena` en simulado |
+| 5.9 | Lanza `alertas-seguridad` con `{"siempre":true}` y el secreto **nuevo** `ALERTAS_SECRETO` | Llega el correo. Con el secreto viejo (`COPIA_SECRETO`): 403 |
+| 5.10 | **(SQL)** Crea una función de prueba `create function public.prueba_x() returns int language sql as 'select 1';` y mira `select has_function_privilege('anon', 'public.prueba_x()', 'execute');`. Bórrala después (`drop function public.prueba_x();`) | `false`: las funciones nuevas ya no quedan abiertas a anon |
+
 ---
 
 # Parte 2 · Pruebas por API (script)
@@ -148,6 +167,14 @@ de variables de entorno o lo pregunta al empezar. Necesita Node 18 o más.
   - Insertar, cambiar o borrar en `ventas_espera` siendo administrador: denegado.
   - `apartar` con otro NIF o con más de 200 KB: rechazado.
   - `forzar` como camarero: 403; sin motivo: 400.
+- **Bloque 5:**
+  - El camarero no lee `tbai_certificados`; nadie escribe la fila «servidor» desde la app.
+  - Fichar con hora de hace 3 días: fuera de plazo.
+  - PIN de alguien que no es del bar: misma respuesta que un PIN incorrecto.
+  - La app no puede llamar a `reclamar_accion_manual` ni a `alertas_resumen`.
+  - Fotos: ni HTML ni más de 2 MB.
+- **Con `--esperas`:** resumen y copia manuales dos veces seguidas (la segunda, 429) y dos resúmenes a
+  la vez (solo pasa uno). **Manda un correo de resumen y hace una copia en Drive**.
 - **Con `--bloqueos`:** 20 PIN falsos a la vez a la «víctima» → solo se prueban 5; después sigue bloqueado.
 - **Con `--bloqueo-bar`:** 20 PIN falsos repartidos entre 4 empleados → el camarero tampoco entra con su
   PIN bueno. **El bar queda sin entrada con PIN 15 minutos**: déjalo para el final.
@@ -168,6 +195,7 @@ $env:GR_VICTIMA_ID = '<id del empleado que se puede bloquear>'  # para --bloqueo
 $env:GR_OTRO_ADMIN_ID = '<id de otro administrador>'  # opcional
 node herramientas/pruebas_api.mjs
 node herramientas/pruebas_api.mjs --bloqueos
+node herramientas/pruebas_api.mjs --esperas          # manda un resumen y hace una copia
 node herramientas/pruebas_api.mjs --bloqueo-bar      # al final: 15 minutos sin PIN en el bar
 ```
 
