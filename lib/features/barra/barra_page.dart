@@ -276,6 +276,8 @@ class _BarraPageState extends State<BarraPage> {
             'descripcion': l.nombre,
             'cantidad': l.cantidad,
             'precio_unitario': l.precio,
+            // El precio lo pone la base: el del producto más estos extras (migración 0049)
+            'modificadores': [for (final m in l.mods) m['id']],
             // Lo de cocina va a la pantalla; lo de barra se sirve al momento
             'estado_cocina': _areas[l.producto['area_id']] == 'Cocina' ? 'pendiente' : 'servido',
             'curso': 'ya',
@@ -410,6 +412,9 @@ class _BarraPageState extends State<BarraPage> {
             'descripcion': l.nombre,
             'cantidad': l.cantidad,
             'precio_unitario': l.precio,
+            'modificadores': [for (final m in l.mods) m['id']],
+            // Hecho sin internet: la base respeta este precio (va firmado) y avisa si no cuadra
+            'sin_conexion': true,
             'tipo_iva': ((l.producto['tipo_iva'] as num?) ?? 10).toDouble(),
             'estado_cocina': _areas[l.producto['area_id']] == 'Cocina' ? 'pendiente' : 'servido',
           },

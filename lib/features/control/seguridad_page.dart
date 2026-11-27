@@ -34,6 +34,8 @@ class _SeguridadPageState extends State<SeguridadPage> {
     'pin_otro_bar': 'No pudo cambiar el PIN de un empleado que también está en otro bar',
     'pin_bloqueado_bar': 'Entrada con PIN bloqueada 15 minutos en todo el bar (20 PIN incorrectos)',
     'pin_cambiado': 'Cambió su PIN',
+    'precio_distinto': 'Venta sin internet con un precio distinto del de la carta',
+    'fondo_distinto': 'Abrió caja con un fondo distinto del que se dejó',
   };
 
   @override

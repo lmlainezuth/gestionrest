@@ -290,6 +290,8 @@ class _ComandaPageState extends State<ComandaPage> {
             'descripcion': l.nombre,
             'cantidad': l.cantidad,
             'precio_unitario': l.precio,
+            // El precio lo pone la base: el del producto más estos extras (migración 0049)
+            'modificadores': [for (final m in l.mods) m['id']],
             'nota': l.nota.isEmpty ? null : l.nota,
             'curso': l.curso,
             'en_espera': l.curso == '2' || l.curso == 'postre',

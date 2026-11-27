@@ -31,6 +31,8 @@ class _PlataformaTabState extends State<PlataformaTab> {
     'pin_otro_bar': 'PIN de un empleado que está en otro bar',
     'pin_bloqueado_bar': 'Entrada con PIN bloqueada en todo el bar',
     'pin_cambiado': 'Cambio de PIN',
+    'precio_distinto': 'Venta sin internet con otro precio',
+    'fondo_distinto': 'Fondo de caja distinto del que se dejó',
   };
 
   @override

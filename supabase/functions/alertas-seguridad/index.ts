@@ -20,6 +20,8 @@ const NOMBRES: Record<string, string> = {
   pin_otro_bar: "PIN que no se pudieron cambiar (usuario en otro bar)",
   pin_bloqueado_bar: "bloqueos de la entrada con PIN en todo el bar",
   pin_cambiado: "cambios de PIN",
+  precio_distinto: "ventas sin internet con un precio distinto del de la carta",
+  fondo_distinto: "aperturas de caja con un fondo distinto del que se dejó",
 };
 
 Deno.serve(async (req) => {

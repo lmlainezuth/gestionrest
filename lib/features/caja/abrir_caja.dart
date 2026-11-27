@@ -87,10 +87,8 @@ Future<bool> abrirCajaRapida(BuildContext context) async {
   await supabase.from('turnos_caja').insert({
     'caja_id': caja['id'],
     'usuario_id': supabase.auth.currentUser!.id,
+    // Si no coincide con lo que se dejó, la base lo anota en el turno y en Seguridad (migración 0049)
     'efectivo_inicial': fondo,
-    // Si no coincide con lo que se dejó, queda anotado (el cajón se tocó entre turnos)
-    if (dejado != null && (fondo - dejado).abs() >= 0.005)
-      'nota': 'Abrió con ${euros(fondo)}; al cerrar se dejaron ${euros(dejado)}',
   });
   if (dejado != null && (fondo - dejado).abs() >= 0.005 && context.mounted) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
