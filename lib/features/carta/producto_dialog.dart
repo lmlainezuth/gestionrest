@@ -6,6 +6,7 @@ import '../../main.dart';
 import 'alergenos.dart';
 import 'package:file_picker/file_picker.dart';
 
+import '../auth/perfil.dart';
 import '../ticketbai/modelos.dart' show euros;
 import 'colores.dart';
 import 'modificadores_dialog.dart';
@@ -71,7 +72,10 @@ class _ProductoDialogState extends State<ProductoDialog> {
     setState(() => _subiendo = true);
     try {
       final bytes = await f.readAsBytes();
-      final ruta = '${DateTime.now().microsecondsSinceEpoch}.$ext';
+      // Cada bar sube a su carpeta: la base solo deja tocar las imágenes de la carpeta propia
+      final empresa = Perfil.cache?.empresaId;
+      if (empresa == null) throw 'no hay empresa elegida';
+      final ruta = '$empresa/${DateTime.now().microsecondsSinceEpoch}.$ext';
       await supabase.storage.from('productos').uploadBinary(ruta, bytes,
           fileOptions: FileOptions(contentType: 'image/${ext == 'jpg' ? 'jpeg' : ext}'));
       setState(() => _imagen = supabase.storage.from('productos').getPublicUrl(ruta));

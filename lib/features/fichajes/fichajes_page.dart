@@ -389,7 +389,7 @@ class _PanelJornadaState extends State<_PanelJornada> {
                     Text(
                       switch (f['origen']) {
                         'correccion' => 'Corregido: ${f['motivo']}',
-                        'sin_conexion' => 'Fichado sin internet',
+                        'sin_conexion' => _textoSinInternet(f),
                         _ => 'Fichado en el TPV',
                       },
                       style: const TextStyle(color: C.gris, fontSize: 12),
@@ -454,4 +454,13 @@ class _PanelJornadaState extends State<_PanelJornada> {
       ]),
     );
   }
+}
+
+/// Un fichaje sin internet lleva la hora que dijo el equipo; si llegó mucho más tarde se ve
+/// cuándo, para poder revisarlo (la hora fichada la pone el equipo, no el servidor).
+String _textoSinInternet(Map<String, dynamic> f) {
+  final llego = f['registrado_en'] == null ? null : DateTime.parse(f['registrado_en'] as String).toLocal();
+  if (llego == null || llego.difference(momento(f)).inMinutes < 10) return 'Fichado sin internet';
+  final d = '${llego.day.toString().padLeft(2, '0')}/${llego.month.toString().padLeft(2, '0')}';
+  return 'Fichado sin internet · llegó el $d a las ${hora(llego)}: revísalo';
 }

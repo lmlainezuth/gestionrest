@@ -85,8 +85,9 @@ class VentaOffline {
           await supabase.rpc('tbai_ultima_factura', params: {'p_cadena': serie}) as List);
       final numeros = <String, int>{};
       for (final s in [serie, '${serie}F', '${serie}R']) {
-        final u = await supabase.from('facturas').select('numero').eq('serie', s).order('numero', ascending: false).limit(1).maybeSingle();
-        if (u != null) numeros[s] = u['numero'] as int;
+        // El servidor mira todas las facturas de la serie (el camarero no las ve todas)
+        final u = await supabase.rpc('tbai_ultimo_numero', params: {'p_serie': s}) as num?;
+        if (u != null) numeros[s] = u.toInt();
       }
       await CadenaEquipo.sincronizarCon(ultimas.isEmpty ? null : ultimas.first, numeros);
     }

@@ -482,6 +482,7 @@ class _ResumenCorreoState extends State<_ResumenCorreo> {
     if (c.isNotEmpty && !RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+(,\s*[^@\s]+@[^@\s]+\.[^@\s]+)*$').hasMatch(c)) {
       return _avisar('Revisa el correo (varios, separados por comas)');
     }
+    if (c.split(',').length > 5) return _avisar('Como mucho 5 correos');
     setState(() => _ocupado = true);
     try {
       exigirConexion();

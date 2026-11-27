@@ -14,16 +14,11 @@ import 'caja_service.dart';
 Future<bool> abrirCajaRapida(BuildContext context) async {
   final caja = await CajaService.caja();
   if (await CajaService.turnoAbierto(caja['id'] as String) != null) return true;
-  final ultimo = await supabase
-      .from('turnos_caja')
-      .select('efectivo_inicial, fondo_siguiente, estado')
-      .eq('caja_id', caja['id'])
-      .order('abierto_en', ascending: false)
-      .limit(1)
-      .maybeSingle();
-  // Lo que se dejó en el cajón al cerrar el último turno (si no consta, con lo que abrió)
-  final dejado = (ultimo?['fondo_siguiente'] as num?)?.toDouble();
-  final propuesto = dejado ?? ((ultimo?['efectivo_inicial'] as num?) ?? 0).toDouble();
+  // Lo que se dejó en el cajón al cerrar el último turno (si no consta, con lo que abrió). Lo da el
+  // servidor: el camarero no ve los turnos cerrados (cuadre ciego)
+  final ultimo = await supabase.rpc('fondo_sugerido', params: {'p_caja': caja['id']}) as Map?;
+  final dejado = (ultimo?['dejado'] as num?)?.toDouble();
+  final propuesto = dejado ?? ((ultimo?['inicial'] as num?) ?? 0).toDouble();
   if (!context.mounted) return false;
 
   // Los tickets llevan la hora del equipo: si el reloj va mal, se avisa antes de empezar a cobrar

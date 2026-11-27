@@ -4,7 +4,7 @@
 // La llaman: pg_cron cada mañana (cabecera x-copia-secreto) → todas las empresas con correo_resumen;
 //            el administrador desde la app ("Enviar prueba") → la suya.
 // Secretos: RESEND_API_KEY, COPIA_SECRETO; opcional RESUMEN_DE ("Bar Itsasoa <avisos@tudominio.com>")
-import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2";
+import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2.50.3";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -119,8 +119,15 @@ Deno.serve(async (req) => {
     const { data: yo } = await db.from("empresa_usuarios").select("rol, activo")
       .eq("empresa_id", perfil?.empresa_actual).eq("usuario_id", user.id).maybeSingle();
     if (yo?.rol !== "admin" || !yo.activo) return json({ error: "Solo el administrador" }, 403);
-    const { data } = await db.from("empresa").select("id, nombre, correo_resumen").eq("id", perfil!.empresa_actual).single();
+    const { data } = await db.from("empresa").select("id, nombre, correo_resumen, resumen_manual_en")
+      .eq("id", perfil!.empresa_actual).single();
     if (!data?.correo_resumen) return json({ error: "Pon antes el correo del resumen" }, 400);
+    // El envío lo paga y lo firma la plataforma: a mano, como mucho uno cada 10 minutos por bar
+    const ultimo = data.resumen_manual_en ? new Date(data.resumen_manual_en).getTime() : 0;
+    if (Date.now() - ultimo < 10 * 60 * 1000) {
+      return json({ error: "Ya se envió un resumen hace poco: espera unos minutos" }, 429);
+    }
+    await db.from("empresa").update({ resumen_manual_en: new Date().toISOString() }).eq("id", data.id);
     empresas = [data];
   }
 
@@ -135,7 +142,9 @@ Deno.serve(async (req) => {
         headers: { Authorization: `Bearer ${clave}`, "Content-Type": "application/json" },
         body: JSON.stringify({
           from: Deno.env.get("RESUMEN_DE") ?? "GestionRest <onboarding@resend.dev>",
-          to: e.correo_resumen!.split(",").map((s) => s.trim()).filter(Boolean),
+          // Como mucho 5 direcciones válidas (el resto se ignora)
+          to: e.correo_resumen!.split(",").map((s) => s.trim())
+            .filter((s) => /^[^\s@,<>"]+@[^\s@,<>"]+\.[^\s@,<>"]+$/.test(s)).slice(0, 5),
           subject: asunto,
           html,
         }),

@@ -7,6 +7,9 @@ import 'package:pointycastle/export.dart';
 
 /// Firma RSA-SHA256 con el certificado (.pfx) instalado en este equipo, sin internet.
 /// Android: KeyStore PKCS12 de Java (MainActivity.kt). Windows: .NET desde PowerShell.
+/// PowerShell por su ruta completa (no por el PATH, que podría apuntar a otro programa).
+final _rutaPowershell = '${Platform.environment['SystemRoot'] ?? r'C:\Windows'}' r'\System32\WindowsPowerShell\v1.0\powershell.exe';
+
 class FirmaEquipo {
   static const _canal = MethodChannel('gestionrest/firma');
 
@@ -171,7 +174,7 @@ try {
       await dat.writeAsBytes(datos, flush: true);
       await ps1.writeAsString(_script, flush: true);
       final r = await Process.run(
-        'powershell.exe',
+        _rutaPowershell,
         ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ps1.path],
         environment: {'TBAI_PFX': pfx.path, 'TBAI_CLAVE': clave, 'TBAI_DATOS': dat.path, 'TBAI_ACCION': accion},
         stdoutEncoding: utf8,
@@ -249,7 +252,7 @@ while ($true) {
       await pfx.writeAsBytes(p12, flush: true);
       await ps1.writeAsString(_script, flush: true);
       final p = await Process.start(
-        'powershell.exe',
+        _rutaPowershell,
         ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ps1.path],
         environment: {'TBAI_PFX': pfx.path, 'TBAI_CLAVE': clave},
       );

@@ -5,3 +5,22 @@
 
 [functions]
   node_bundler = "esbuild"
+
+# Toda la web: no se puede meter dentro de otra página (cobrar, anular o cerrar caja con un clic
+# engañado) y el navegador no adivina tipos de fichero ni da permisos de cámara, micro o ubicación.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    Content-Security-Policy = "frame-ancestors 'none'"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+
+# Carta pública: solo su propio script y estilo (por su huella sha256), datos de Supabase e imágenes.
+# OJO: si se cambia el <script> o el <style> de web/carta/index.html hay que recalcular las huellas
+# (van las de saltos de línea LF y CRLF). Si no, la carta sale en blanco.
+[[headers]]
+  for = "/carta/*"
+  [headers.values]
+    Content-Security-Policy = "default-src 'none'; script-src 'sha256-Apq4dIkz41nDquHocSWEUyWrrsjZxta4bzbbvUrLlg8=' 'sha256-quQpMb3Dh6ihCueYJ/3pFQ/WWVD64DQg2e5MRWOAG3k='; style-src 'sha256-nPR5BFzf0fPiEi4bx23qnwZevLhVNAFhTHVEqvqFiY4=' 'sha256-ksLVq+cVxAXOGCJqUiEYvwk0K2dJLfpvS87MOkCI5wI='; connect-src https://zouujjameuyyedqiotxt.supabase.co; img-src https: data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"

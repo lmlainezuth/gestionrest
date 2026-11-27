@@ -6,6 +6,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
+import '../../core/csv.dart';
 import '../../core/red.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
@@ -288,8 +289,8 @@ class _InformesPageState extends State<InformesPage> {
         _d(f),
         '${f.hour.toString().padLeft(2, '0')}:${f.minute.toString().padLeft(2, '0')}',
         p['numero'],
-        _dondePedido(p),
-        _nombres[p['camarero_id']] ?? '',
+        celdaCsv(_dondePedido(p)),
+        celdaCsv(_nombres[p['camarero_id']] ?? ''),
         p['num_personas'] ?? '',
         _n(m('efectivo')),
         _n(m('tarjeta')),
@@ -309,7 +310,7 @@ class _InformesPageState extends State<InformesPage> {
       }
     }
     for (final e in prod.entries.toList()..sort((a, b) => b.value.$2.compareTo(a.value.$2))) {
-      b.writeln('${e.key.replaceAll(';', ',')};${e.value.$1.toStringAsFixed(0)};${_n(e.value.$2)}');
+      b.writeln('${celdaCsv(e.key)};${e.value.$1.toStringAsFixed(0)};${_n(e.value.$2)}');
     }
     final bytes = utf8.encode(b.toString());
     final (desde, _) = _rango();

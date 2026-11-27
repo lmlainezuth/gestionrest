@@ -46,12 +46,13 @@ class CertificadoEquipo {
       await p.remove(_kClave);
       await p.remove(_kSinAlmacen);
     } catch (_) {
-      // El almacén seguro de este equipo no funciona: se guarda sin cifrar, como antes
+      // El almacén seguro de este equipo no funciona. El certificado y su contraseña NO se guardan
+      // sin cifrar (cualquiera con acceso a la cuenta del equipo los podría copiar): no se instala.
       await _borrarSeguro();
       await p.remove(_kCifrado);
-      await p.setString(_kAntiguo, base64.encode(bytes));
-      await p.setString(_kClave, clave);
-      await p.setBool(_kSinAlmacen, true);
+      await p.remove(_kNombre);
+      throw StateError('Este equipo no puede guardar el certificado de forma segura. '
+          'Usa el servicio puente (no hace falta instalarlo) o prueba en otro equipo.');
     }
   }
 
@@ -74,7 +75,16 @@ class CertificadoEquipo {
     final bytes = base64.decode(antiguo);
     final clave = p.getString(_kClave) ?? '';
     // Formato anterior: se intenta cifrar una vez (si el equipo no puede, se queda como está)
-    if (!(p.getBool(_kSinAlmacen) ?? false)) await guardar(bytes, clave, nombre);
+    // Si no se puede, sigue funcionando como estaba (para no dejar al equipo sin facturar), pero
+    // conviene quitar el certificado de este equipo y usar el servicio puente
+    if (!(p.getBool(_kSinAlmacen) ?? false)) {
+      try {
+        await guardar(bytes, clave, nombre);
+      } catch (_) {
+        await p.setString(_kNombre, nombre);
+        await p.setBool(_kSinAlmacen, true);
+      }
+    }
     return (bytes: bytes, clave: clave, nombre: nombre);
   }
 

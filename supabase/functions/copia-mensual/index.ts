@@ -1,8 +1,9 @@
 // GestiónRest · copia de seguridad en Google Drive (un zip por empresa y mes).
 // Guarda en un .zip las facturas (con su XML firmado y la respuesta de Hacienda), anulaciones,
 // subsanaciones, ventas, caja, gastos, fichajes, cuadrante, stock y registro de anulaciones del
-// mes, y lo sube a Drive › "GestionRest - Copias" › <empresa> › <empresa>_<mes>.zip (si ya
-// existe, lo sustituye). Conservar: facturas 4-6 años, fichajes 4 años.
+// mes, y lo sube a Drive › "GestionRest - Copias" › "<id> · <nombre>" › copia_<mes>.zip (si ya
+// existe, lo sustituye). La carpeta se busca por el id del bar (appProperties.empresa), no por el
+// nombre. Conservar: facturas 4-6 años, fichajes 4 años.
 //
 // La llaman:
 //  · pg_cron TODOS LOS DÍAS (cabecera x-copia-secreto = secreto COPIA_SECRETO) → todas las
@@ -13,7 +14,7 @@
 // Secretos: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN, COPIA_SECRETO;
 // para el aviso: RESEND_API_KEY, AVISOS_CORREO (tu correo; con el remitente de pruebas de Resend
 // solo llega al correo de tu cuenta de Resend) y opcional RESUMEN_DE.
-import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2";
+import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2.50.3";
 import JSZip from "npm:jszip@3.10.1";
 
 const cors = {
@@ -71,8 +72,11 @@ async function siExiste(p: Promise<any[]>): Promise<any[]> {
 function csv(filas: any[], columnas: string[]): string {
   const esc = (v: unknown) => {
     if (v === null || v === undefined) return "";
-    const s = typeof v === "object" ? JSON.stringify(v) : String(v);
-    return /[";\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
+    let s = typeof v === "object" ? JSON.stringify(v) : String(v);
+    // Texto que Excel tomaría como fórmula (=, +, -, @, tabulador o retorno al principio): se le
+    // antepone un apóstrofo. Los números se quedan como están.
+    if (typeof v === "string" && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+    return /[";\n\r\t]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
   };
   // Separador ; y BOM para que Excel en español lo abra bien
   return "﻿" + [columnas.join(";"), ...filas.map((f) => columnas.map((c) => esc(f[c])).join(";"))].join("\n");
@@ -120,13 +124,26 @@ async function buscar(token: string, nombre: string, padre: string | null, carpe
   return j.files?.[0]?.id ?? null;
 }
 
-async function carpeta(token: string, nombre: string, padre: string | null): Promise<string> {
-  const id = await buscar(token, nombre, padre, true);
+/** Carpeta por nombre o, si se da [empresa], por la marca appProperties.empresa (el nombre puede cambiar). */
+async function carpeta(token: string, nombre: string, padre: string | null, empresa?: string): Promise<string> {
+  let id: string | null;
+  if (empresa) {
+    const q = [`appProperties has { key='empresa' and value='${comillas(empresa)}' }`, "trashed=false",
+      "mimeType='application/vnd.google-apps.folder'", ...(padre ? [`'${padre}' in parents`] : [])].join(" and ");
+    const j = await drive(token, `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id)`);
+    id = j.files?.[0]?.id ?? null;
+  } else {
+    id = await buscar(token, nombre, padre, true);
+  }
   if (id) return id;
   const j = await drive(token, "https://www.googleapis.com/drive/v3/files?fields=id", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: nombre, mimeType: "application/vnd.google-apps.folder", ...(padre ? { parents: [padre] } : {}) }),
+    body: JSON.stringify({
+      name: nombre, mimeType: "application/vnd.google-apps.folder",
+      ...(padre ? { parents: [padre] } : {}),
+      ...(empresa ? { appProperties: { empresa } } : {}),
+    }),
   });
   return j.id;
 }
@@ -245,8 +262,10 @@ async function copiar(db: SupabaseClient, token: string, empresa: { id: string; 
 
   const bytes = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
   const raiz = await carpeta(token, "GestionRest - Copias", null);
-  const dir = await carpeta(token, empresa.nombre, raiz);
-  const nombre = `${empresa.nombre}_${mes}.zip`;
+  // La carpeta va por el id del bar, que no cambia ni se repite: dos bares con el mismo nombre (o uno
+  // que se cambie el nombre) ya no pisan la copia de otro. Las copias anteriores siguen en su carpeta antigua.
+  const dir = await carpeta(token, `${empresa.id} · ${empresa.nombre.replace(/[\\'\/]/g, " ").slice(0, 60)}`, raiz, empresa.id);
+  const nombre = `copia_${mes}.zip`;
   const r = await subir(token, dir, nombre, bytes);
   return {
     archivo: nombre,
@@ -289,7 +308,7 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
   const cuerpo = await req.json().catch(() => ({}));
-  const meses = /^\d{4}-\d{2}$/.test(cuerpo?.mes ?? "") ? [cuerpo.mes as string] : mesesACopiar();
+  const mesPedido = /^\d{4}-(0[1-9]|1[0-2])$/.test(cuerpo?.mes ?? "") ? cuerpo.mes as string : null;
 
   // ¿Quién llama? pg_cron (secreto) → todas; administrador → la suya
   let empresas: { id: string; nombre: string }[];
@@ -309,6 +328,11 @@ Deno.serve(async (req) => {
     const { data } = await db.from("empresa").select("id, nombre").eq("id", perfil!.empresa_actual).single();
     empresas = data ? [data] : [];
   }
+  // Un administrador solo rehace el mes en curso o el anterior: los cerrados no se reescriben a mano
+  // (y no se llena la cuenta de Drive compartida con meses inventados)
+  const hoy = hoyMadrid();
+  const recientes = [textoMes(hoy), textoMes(new Date(hoy.getFullYear(), hoy.getMonth() - 1, 1))];
+  const meses = mesPedido && (automatica || recientes.includes(mesPedido)) ? [mesPedido] : mesesACopiar();
 
   let token: string;
   try {

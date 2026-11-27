@@ -1,6 +1,6 @@
 // GestiónRest · alta de usuarios con nombre + PIN, y cambio de PIN.
 // Solo administradores. Corre en el servidor (usa la clave de servicio).
-import { createClient } from "npm:@supabase/supabase-js@2";
+import { createClient } from "npm:@supabase/supabase-js@2.50.3";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -22,6 +22,12 @@ Deno.serve(async (req) => {
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
+  // Apunta un intento sospechoso en eventos_seguridad (panel Seguridad y aviso diario); si falla, sigue
+  const apuntarEvento = async (empresa: string, tipo: string, usuario: string, detalle: string) => {
+    try {
+      await admin.from("eventos_seguridad").insert({ empresa_id: empresa, tipo, usuario_id: usuario, detalle });
+    } catch (_) { /* no es crítico */ }
+  };
 
   const jwt = (req.headers.get("Authorization") ?? "").replace("Bearer ", "");
   const { data: { user } } = await admin.auth.getUser(jwt);
@@ -46,7 +52,10 @@ Deno.serve(async (req) => {
   if (b.accion === "pin") {
     const { data: miembro } = await admin.from("empresa_usuarios").select("usuario_id, rol")
       .eq("empresa_id", empresa).eq("usuario_id", String(b.id)).maybeSingle();
-    if (!miembro) return json({ error: "Ese usuario no es de tu empresa" }, 403);
+    if (!miembro) {
+      await apuntarEvento(String(empresa), "usuario_ajeno", user.id, "Intentó cambiar el PIN de un usuario de otro bar");
+      return json({ error: "Ese usuario no es de tu empresa" }, 403);
+    }
     const { data: p } = await admin.from("perfiles").select("correo").eq("id", String(b.id)).single();
     if (!p?.correo) return json({ error: "Usuario no encontrado" }, 404);
     // Solo cuentas de PIN: la contraseña de una cuenta con correo la cambia su dueño
@@ -59,6 +68,7 @@ Deno.serve(async (req) => {
         .eq("usuario_id", String(b.id)).neq("empresa_id", empresa).limit(1);
       if (errOtras) return json({ error: errOtras.message }, 400);
       if (otras && otras.length > 0) {
+        await apuntarEvento(String(empresa), "pin_otro_bar", user.id, "No pudo cambiar el PIN de un empleado que también está en otro bar");
         return json({ error: "Este usuario también está en otro bar: solo él puede cambiar su PIN" }, 403);
       }
     }
@@ -66,7 +76,10 @@ Deno.serve(async (req) => {
     const { error } = await admin.auth.admin.updateUserById(String(b.id), {
       password: claveDePin(pin, p.correo),
     });
-    return error ? json({ error: error.message }, 400) : json({ ok: true });
+    if (error) return json({ error: error.message }, 400);
+    // Para pasar a administrador hace falta un PIN largo (lo comprueba la base, migración 0041)
+    await admin.from("perfiles").update({ pin_seguro: pin.length >= PIN_ADMIN }).eq("id", String(b.id));
+    return json({ ok: true });
   }
 
   // Alta
@@ -86,7 +99,8 @@ Deno.serve(async (req) => {
   if (error) return json({ error: error.message }, 400);
 
   // Si falla cualquier paso se borra el usuario: nunca queda uno a medias (sin empresa)
-  const { error: e1 } = await admin.from("perfiles").update({ nombre, empresa_actual: empresa }).eq("id", data.user.id);
+  const { error: e1 } = await admin.from("perfiles")
+    .update({ nombre, empresa_actual: empresa, pin_seguro: pin.length >= PIN_ADMIN }).eq("id", data.user.id);
   const { error: e2 } = e1 ? { error: null } :
     await admin.from("empresa_usuarios").insert({ empresa_id: empresa, usuario_id: data.user.id, rol, activo: true });
   if (e1 || e2) {

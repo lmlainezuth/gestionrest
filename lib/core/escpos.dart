@@ -196,6 +196,12 @@ class EscPos {
 
   void _txt(String s) {
     for (final r in s.runes) {
+      // Texto de la base (platos, notas, clientes): fuera los caracteres de control (ESC, GS, DLE…),
+      // que la impresora tomaría como órdenes (abrir el cajón, cambiar ajustes). Solo queda el salto de línea.
+      if ((r < 0x20 && r != 0x0A) || r == 0x7F) {
+        _b.add(0x20);
+        continue;
+      }
       if (r < 128) {
         _b.add(r);
         continue;

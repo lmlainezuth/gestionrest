@@ -28,11 +28,16 @@ Future<(int, String)> _conCurl(String url, String xml, List<int> p12, String cla
     final cuerpo = File('${dir.path}\\f.xml');
     await pfx.writeAsBytes(p12, flush: true);
     await cuerpo.writeAsBytes(utf8.encode(xml), flush: true);
-    final r = await Process.run('curl.exe', [
+    // La contraseña va en un fichero de configuración de la carpeta temporal (se borra al final),
+    // no en la línea de comandos: esa la ve cualquier programa del equipo que liste procesos.
+    final cert = '${pfx.path}:${clave.replaceAll(':', r'\:')}';
+    final config = File('${dir.path}\\c.cfg');
+    await config.writeAsString('cert = "${cert.replaceAll(r'\', r'\\').replaceAll('"', r'\"')}"\n', flush: true);
+    final r = await Process.run('${Platform.environment['SystemRoot'] ?? r'C:\Windows'}\\System32\\curl.exe', [
       '-sS',
       '--max-time', '40',
       '--cert-type', 'P12',
-      '--cert', '${pfx.path}:${clave.replaceAll(':', r'\:')}',
+      '-K', config.path,
       '-H', 'Content-Type: application/xml;charset=UTF-8',
       '--data-binary', '@${cuerpo.path}',
       '-w', '\n__HTTP__%{http_code}',

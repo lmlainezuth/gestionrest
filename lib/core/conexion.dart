@@ -171,6 +171,23 @@ class CacheLectura {
     return _indice ??= Map<String, dynamic>.from(jsonDecode(p.getString(_kIndice) ?? '{}') as Map);
   }
 
+  /// Al cerrar sesión: el siguiente usuario del equipo (o del navegador) no puede leer lo que
+  /// vio el anterior, aunque las copias vayan por usuario.
+  static Future<void> vaciar() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final indice = await _cargarIndice();
+      for (final clave in indice.keys.toList()) {
+        await AlmacenCache.borrar(clave);
+      }
+      indice.clear();
+      await p.remove(_kIndice);
+      for (final k in p.getKeys().where((k) => k.startsWith('perfil_')).toList()) {
+        await p.remove(k);
+      }
+    } catch (_) {}
+  }
+
   static Future<Map<String, dynamic>?> leer(String clave) async {
     try {
       final s = await AlmacenCache.leer(clave);

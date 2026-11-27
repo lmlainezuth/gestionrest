@@ -9,6 +9,7 @@ const tiposAnulacion = <String, ({String texto, IconData icono})>{
   'factura_anulada': (texto: 'Factura anulada', icono: Icons.block),
   'devolucion': (texto: 'Devolución', icono: Icons.undo),
   'quitado_antes_cobrar': (texto: 'Eliminado antes de cobrar (Barra)', icono: Icons.exposure_minus_1),
+  'cobro_fuera_turno': (texto: 'Cobro en un turno ya cerrado', icono: Icons.warning_amber_outlined),
 };
 
 const estadosCocina = {
@@ -22,7 +23,7 @@ const rojo = Color(0xFFB3261E);
 
 /// Más grave lo que ya estaba hecho o cobrado.
 Color colorAnulacion(Map<String, dynamic> a) => switch (a['tipo']) {
-      'venta_anulada' || 'factura_anulada' || 'linea_borrada' => rojo,
+      'venta_anulada' || 'factura_anulada' || 'linea_borrada' || 'cobro_fuera_turno' => rojo,
       'linea_anulada' when a['estado_cocina'] == 'listo' || a['estado_cocina'] == 'servido' => C.naranja,
       _ => C.gris,
     };

@@ -79,12 +79,12 @@ class FacturacionService {
     for (var intento = 0; intento < 5; intento++) {
       final r1 = await Future.wait<dynamic>([
         supabase.rpc('tbai_ultima_factura', params: {'p_cadena': cadena}),
-        supabase.from('facturas').select('numero').eq('serie', serie).order('numero', ascending: false).limit(1).maybeSingle(),
+        // El servidor mira todas las facturas de la serie (el camarero no las ve todas)
+        supabase.rpc('tbai_ultimo_numero', params: {'p_serie': serie}),
       ]);
       final ultimas = List<Map<String, dynamic>>.from(r1[0] as List);
       final previa = ultimas.isEmpty ? null : ultimas.first;
-      final ultimaSerie = r1[1] as Map<String, dynamic>?;
-      final numero = ((ultimaSerie?['numero'] as int?) ?? 0) + 1;
+      final numero = ((r1[1] as num?)?.toInt() ?? 0) + 1;
       final fila = await prepararFactura(
         config: config,
         firmar: proveedor.firmar,

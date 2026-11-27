@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/tema.dart';
 import '../../main.dart';
+import '../auth/perfil.dart';
 import '../carta/alergenos.dart';
 
 // Paleta oscura de la pantalla de cocina
@@ -64,12 +65,18 @@ class _CocinaPageState extends State<CocinaPage> {
       // Sin internet: se queda con las zonas guardadas
     }
     await _cargar();
+    // Solo los cambios de este bar (los borrados no se pueden filtrar y no llegan: la recarga de
+    // cada 30 segundos los recoge)
+    final empresa = Perfil.cache?.empresaId;
     _canal = supabase
         .channel('cocina')
         .onPostgresChanges(
           event: PostgresChangeEvent.all,
           schema: 'public',
           table: 'pedido_detalle',
+          filter: empresa == null
+              ? null
+              : PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'empresa_id', value: empresa),
           callback: (_) => _programarCarga(),
         )
         .subscribe();

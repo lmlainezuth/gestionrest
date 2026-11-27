@@ -48,13 +48,18 @@ class _CajaPageState extends State<CajaPage> {
       _conceptos = List<Map<String, dynamic>>.from(
           await supabase.from('conceptos_gasto').select().eq('activo', true).order('nombre'));
       if (_turno != null) {
-        final pagos = await supabase.from('pagos').select('metodo, importe, pedido_id').eq('turno_id', _turno!['id']);
         _ventas = {};
-        for (final p in pagos) {
-          final m = p['metodo'] as String;
-          _ventas[m] = (_ventas[m] ?? 0) + (p['importe'] as num).toDouble();
+        if (Perfil.cache?.esAdmin ?? false) {
+          final pagos = await supabase.from('pagos').select('metodo, importe, pedido_id').eq('turno_id', _turno!['id']);
+          for (final p in pagos) {
+            final m = p['metodo'] as String;
+            _ventas[m] = (_ventas[m] ?? 0) + (p['importe'] as num).toDouble();
+          }
+          _tickets = pagos.map((p) => p['pedido_id']).toSet().length;
+        } else {
+          // Cuadre ciego: el camarero no lee los cobros, solo cuántos tickets lleva el turno
+          _tickets = ((await supabase.rpc('tickets_del_turno', params: {'p_turno': _turno!['id']})) as num?)?.toInt() ?? 0;
         }
-        _tickets = pagos.map((p) => p['pedido_id']).toSet().length;
         _movimientos = List<Map<String, dynamic>>.from(await supabase
             .from('movimientos_caja')
             .select('*, conceptos_gasto(nombre)')
@@ -186,9 +191,14 @@ class _CajaPageState extends State<CajaPage> {
     });
     if (r != null) UltimaVenta.dato.value = null; // caja cerrada: la última venta ya no se enseña
     if (!mounted || r == null) return;
+    // Las ventas y los tickets los da el servidor al cerrar (el camarero no los veía antes)
+    final ventasCierre = r!['ventas'] is Map
+        ? {for (final e in (r!['ventas'] as Map).entries) e.key as String: (e.value as num).toDouble()}
+        : ventas;
+    final ticketsCierre = (r!['tickets'] as num?)?.toInt() ?? tickets;
     void imprimir() => imprimirCierreCaja(
           r: r!, datos: datos, turno: turno, cajaNombre: cajaNombre,
-          ventas: ventas, tickets: tickets, ingresos: ingresos, gastos: gastos,
+          ventas: ventasCierre, tickets: ticketsCierre, ingresos: ingresos, gastos: gastos,
         ).catchError((e) {
           if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No se pudo imprimir: $e')));
         });
@@ -471,6 +481,7 @@ Future<void> imprimirCierreCaja({
         'pedido_anulado': 'cuentas anuladas',
         'linea_anulada': 'productos anulados',
         'linea_borrada': 'productos borrados',
+        'cobro_fuera_turno': 'cobros en un turno ya cerrado',
       };
       l
         ..add(('-', ''))

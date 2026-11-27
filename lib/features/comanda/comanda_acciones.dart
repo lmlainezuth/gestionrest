@@ -134,8 +134,8 @@ Future<bool> unirMesa(BuildContext context, Map<String, dynamic> pedido, Map<Str
   final otra = await _elegirMesa(context, 'Unir a esta cuenta la mesa…', ocupadas);
   if (otra == null) return false;
   final otroPedido = ocupadas.firstWhere((o) => o.mesa['id'] == otra['id']).pedido!;
-  await supabase.from('pedido_detalle').update({'pedido_id': pedido['id']}).eq('pedido_id', otroPedido['id']);
-  await supabase.from('pedidos').update({'estado': 'unido'}).eq('id', otroPedido['id']);
+  // En el servidor, de una vez: pasa los platos y deja la otra cuenta "unida"
+  await supabase.rpc('unir_cuentas', params: {'p_destino': pedido['id'], 'p_origen': otroPedido['id']});
   await supabase.from('mesas').update({'disponibilidad': 'libre'}).eq('id', otra['id']);
   if (context.mounted) _avisar(context, 'Mesa ${otra['nombre']} unida a esta cuenta');
   return true;
@@ -196,50 +196,19 @@ Future<bool> dividirCuenta(BuildContext context, Map<String, dynamic> pedido) as
   );
   if (ok != true) return false;
 
-  // Se crea un pedido aparte con lo elegido
-  final nuevo = await supabase
-      .from('pedidos')
-      .insert({
-        'tipo': pedido['tipo'] ?? 'mesa',
-        'mesa_id': pedido['mesa_id'],
-        'nombre_llevar': pedido['nombre_llevar'],
-        'camarero_id': supabase.auth.currentUser?.id,
-        'num_personas': 1,
-      })
-      .select('id')
-      .single();
-  final movidas = <String>[]; // líneas pasadas enteras
-  final partidas = <({String id, double k})>[]; // líneas partidas
-  for (final l in lineas) {
-    final k = elegidas[l['id']]!;
-    if (k <= 0) continue;
-    if (k == (l['cantidad'] as num).toDouble()) {
-      movidas.add(l['id'] as String);
-    } else {
-      partidas.add((id: l['id'] as String, k: k));
-      await supabase.from('pedido_detalle').update({'cantidad': (l['cantidad'] as num) - k}).eq('id', l['id']);
-      await supabase.from('pedido_detalle').insert({
-        'pedido_id': nuevo['id'],
-        'producto_id': l['producto_id'],
-        'area_id': l['area_id'],
-        'descripcion': l['descripcion'],
-        'cantidad': k,
-        'precio_unitario': l['precio_unitario'],
-        if (l['tipo_iva'] != null) 'tipo_iva': l['tipo_iva'],
-        'nota': l['nota'],
-        'curso': l['curso'] ?? '1',
-        'estado_cocina': l['estado_cocina'],
-      });
-    }
-  }
-  if (movidas.isNotEmpty) {
-    await supabase.from('pedido_detalle').update({'pedido_id': nuevo['id']}).inFilter('id', movidas);
-  }
+  // El servidor crea la cuenta aparte con lo elegido (pasa líneas enteras o parte unidades)
+  final nuevoId = await supabase.rpc('repartir_cuenta', params: {
+    'p_pedido': pedido['id'],
+    'p_lineas': [
+      for (final l in lineas)
+        if (elegidas[l['id']]! > 0) {'id': l['id'], 'cantidad': elegidas[l['id']]},
+    ],
+  }) as String;
 
   final parte = await supabase
       .from('pedidos')
       .select('id, total, pedido_detalle(id, descripcion, cantidad, precio_unitario, tipo_iva, estado_cocina)')
-      .eq('id', nuevo['id'])
+      .eq('id', nuevoId)
       .single();
   if (!context.mounted) return false;
   final factura = await showDialog<Map<String, dynamic>>(
@@ -249,30 +218,16 @@ Future<bool> dividirCuenta(BuildContext context, Map<String, dynamic> pedido) as
   );
 
   if (factura == null) {
-    // Cancelado: todo vuelve a la cuenta original
-    if (movidas.isNotEmpty) {
-      await supabase.from('pedido_detalle').update({'pedido_id': pedido['id']}).inFilter('id', movidas);
-    }
-    for (final p in partidas) {
-      final l = lineas.firstWhere((x) => x['id'] == p.id);
-      await supabase.from('pedido_detalle').update({'cantidad': l['cantidad']}).eq('id', p.id);
-    }
-    // El pedido temporal vuelve a la cuenta original ("unido"): no cuenta como anulación
-    await supabase.from('pedidos').update({'estado': 'unido'}).eq('id', nuevo['id']);
-    await supabase.from('pedido_detalle').delete().eq('pedido_id', nuevo['id']);
+    // Cancelado: todo vuelve a la cuenta original (en el servidor; no cuenta como anulación)
+    await supabase.rpc('cancelar_reparto', params: {'p_nuevo': nuevoId, 'p_original': pedido['id']});
     return false;
   }
   if (context.mounted) {
     await ticketCobrado(context, factura);
   }
   // Si ya no queda nada por cobrar, la cuenta original se cierra
-  final quedan = await supabase
-      .from('pedido_detalle')
-      .select('id')
-      .eq('pedido_id', pedido['id'])
-      .neq('estado_cocina', 'anulado');
-  if (quedan.isEmpty) {
-    await supabase.from('pedidos').update({'estado': 'unido'}).eq('id', pedido['id']);
+  final cerrada = await supabase.rpc('cerrar_cuenta_vacia', params: {'p_pedido': pedido['id']}) as bool? ?? false;
+  if (cerrada) {
     if (pedido['mesa_id'] != null) {
       await supabase.from('mesas').update({'disponibilidad': 'libre'}).eq('id', pedido['mesa_id']);
     }

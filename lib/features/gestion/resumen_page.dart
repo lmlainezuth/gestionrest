@@ -8,6 +8,7 @@ import 'package:printing/printing.dart';
 
 import '../../core/aviso_sin_conexion.dart';
 import '../../core/conexion.dart';
+import '../../core/csv.dart';
 import '../../core/red.dart';
 import '../../core/tema.dart';
 import '../../main.dart';
@@ -298,7 +299,7 @@ class _ResumenPageState extends State<ResumenPage> {
       ..writeln()
       ..writeln('Proveedor;Gasto');
     for (final e in x.porProv.entries.toList()..sort((a, c) => c.value.compareTo(a.value))) {
-      b.writeln('${e.key};${_n(e.value)}');
+      b.writeln('${celdaCsv(e.key)};${_n(e.value)}');
     }
     if (x.trimestres.isNotEmpty) {
       b

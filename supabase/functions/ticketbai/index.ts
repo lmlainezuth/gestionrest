@@ -9,7 +9,7 @@
 // Cuerpo: { accion: 'probar' }                       → datos del certificado
 //         { accion: 'firmar', xml: '<T:TicketBai…>' } → XML firmado y SignatureValue
 //         { accion: 'reenviar', xmlFirmado: '…' }      → envía a Hacienda un XML ya firmado
-import { createClient } from 'npm:@supabase/supabase-js@2';
+import { createClient } from 'npm:@supabase/supabase-js@2.50.3';
 import forge from 'npm:node-forge@1.4.3';
 import * as xadesjs from 'npm:xadesjs@3.0.0';
 import * as xmlcore from 'npm:xml-core@3.0.0';
@@ -114,16 +114,25 @@ async function enviar(xmlFirmado: string, cert: Certificado, entorno: 'pruebas' 
   }
 }
 
+// Apunta un intento sospechoso en eventos_seguridad (panel Seguridad y aviso diario). Con la clave de
+// servicio: la tabla no admite escrituras de usuarios. Si falla, no impide la respuesta.
+async function apuntarEvento(empresa: string, tipo: string, usuario: string, detalle: string) {
+  try {
+    const servicio = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+    await servicio.from('eventos_seguridad').insert({ empresa_id: empresa, tipo, usuario_id: usuario, detalle });
+  } catch (_) { /* sin aviso: no es crítico */ }
+}
+
 // ¿Es el certificado de este NIF? Misma regla que la app (lib/features/ticketbai/titular_nif.dart).
 // Con identificador de entidad (VATES-…, el titular en los certificados de representante) tiene que
 // ser ese: no vale el DNI del representante que también va en el sujeto. Sin él, el NIF tiene que
 // aparecer como palabra suelta, no como trozo de otra.
 function certificadoDelNif(titular: string, nif: string): boolean {
   const t = titular.toUpperCase();
-  if (nif.length !== 9) return false;
+  if (!/^[A-Z0-9]{9}$/.test(nif)) return false;
   const entidad = new Set([...t.matchAll(/VATES-?([A-Z0-9]{9})/g)].map((m) => m[1]));
   if (entidad.size > 0) return entidad.has(nif);
-  return new RegExp(`(^|[^A-Z0-9])${nif.replace(/[^A-Z0-9]/g, '')}([^A-Z0-9]|$)`).test(t);
+  return new RegExp(`(^|[^A-Z0-9])${nif}([^A-Z0-9]|$)`).test(t);
 }
 
 // Solo se firma o se envía un fichero TicketBAI de ESTE titular: raíz conocida y NIF del emisor
@@ -197,6 +206,8 @@ Deno.serve(async (req) => {
       // Primero se firma; la app guarda la factura y después la envía con 'reenviar'
       // Anular es solo del administrador, igual que en la base (tbai_anulaciones)
       if (rol !== 'admin' && String(cuerpo.xml).includes('AnulaTicketBai')) {
+        await apuntarEvento(config.empresa_id, 'anulacion_denegada', usuario.user.id,
+          `Rol ${rol}: intentó firmar la anulación de una factura`);
         return json({ error: 'Solo el administrador puede anular facturas' }, 403);
       }
       const mal = comprobarXml(cuerpo.xml, nif, rol === 'admin' ? ['TicketBai', 'AnulaTicketBai'] : ['TicketBai']);

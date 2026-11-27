@@ -28,7 +28,10 @@ Future<void> main() async {
   Conexion.iniciar();
   // Al salir un usuario, el siguiente no ve la última venta del anterior
   Supabase.instance.client.auth.onAuthStateChange.listen((e) {
-    if (e.event == AuthChangeEvent.signedOut) UltimaVenta.dato.value = null;
+    if (e.event == AuthChangeEvent.signedOut) {
+      UltimaVenta.dato.value = null;
+      CacheLectura.vaciar().ignore(); // lo que vio este usuario no se queda en el equipo
+    }
   });
   await Software.cargarCopia(); // datos del programa guardados en el equipo (sin internet)
   runApp(const GestionRestApp());

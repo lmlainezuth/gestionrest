@@ -29,6 +29,9 @@ class _AvisosListoState extends State<AvisosListo> {
           event: PostgresChangeEvent.update,
           schema: 'public',
           table: 'pedido_detalle',
+          filter: Perfil.cache?.empresaId == null
+              ? null
+              : PostgresChangeFilter(type: PostgresChangeFilterType.eq, column: 'empresa_id', value: Perfil.cache!.empresaId!),
           callback: _cambio,
         )
         .subscribe();

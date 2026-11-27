@@ -19,6 +19,7 @@ import '../control/anulaciones_page.dart';
 import '../control/iva_page.dart';
 import '../control/margenes_page.dart';
 import '../control/panel_hoy_page.dart';
+import '../control/seguridad_page.dart';
 import '../cocina/cocina_page.dart';
 import '../caja/cierres_page.dart';
 import '../gestion/gastos_page.dart';
@@ -204,6 +205,7 @@ class _AdminHomeState extends State<AdminHome> {
           (texto: 'Ventas en detalle', icono: Icons.bar_chart_rounded, permiso: 'informes', pagina: () => const InformesPage()),
           (texto: 'Facturas emitidas', icono: Icons.receipt_long, permiso: 'facturas', pagina: () => const FacturasPage()),
           (texto: 'Anulaciones', icono: Icons.remove_circle_outline, permiso: 'anulaciones', pagina: () => const AnulacionesPage()),
+          (texto: 'Seguridad', icono: Icons.shield_outlined, permiso: 'anulaciones', pagina: () => const SeguridadPage()),
           (texto: 'Márgenes', icono: Icons.percent, permiso: 'informes', pagina: () => const MargenesPage()),
           (texto: 'IVA trimestral', icono: Icons.account_balance_outlined, permiso: 'informes', pagina: () => const IvaPage()),
         ]),

@@ -58,14 +58,13 @@ class CadenaEquipo {
     await p.setString(_kNumeros, jsonEncode(numeros));
   }
 
-  /// Con conexión: deja la copia local igual que la base de datos.
+  /// Con conexión y sin ventas pendientes de subir: deja la copia local EXACTAMENTE igual que la
+  /// base de datos del bar actual. Si el equipo cambió de bar, lo del anterior no se arrastra
+  /// (si no, la primera factura sin internet encadenaría con una factura del otro bar).
   static Future<void> sincronizarCon(Map<String, dynamic>? ultimaBd, Map<String, int> numerosBd) async {
     final p = await SharedPreferences.getInstance();
+    await p.remove(_kUltima);
+    await p.setString(_kNumeros, jsonEncode(numerosBd));
     if (ultimaBd != null) await registrar(ultimaBd);
-    final numeros = Map<String, dynamic>.from(jsonDecode(p.getString(_kNumeros) ?? '{}') as Map);
-    numerosBd.forEach((serie, n) {
-      if (((numeros[serie] as int?) ?? 0) < n) numeros[serie] = n;
-    });
-    await p.setString(_kNumeros, jsonEncode(numeros));
   }
 }

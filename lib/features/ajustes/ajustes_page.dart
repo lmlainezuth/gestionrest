@@ -6,6 +6,7 @@ import 'clientes_tab.dart';
 import 'copias_tab.dart';
 import 'empresa_tab.dart';
 import 'impresoras_tab.dart';
+import 'plataforma_tab.dart';
 import 'programa_tab.dart';
 import 'salones_tab.dart';
 
@@ -23,5 +24,7 @@ class AjustesPage extends StatelessWidget {
         (texto: 'Copias', icono: Icons.backup_outlined, permiso: 'ajustes', pagina: () => const CopiasTab()),
         // Solo el programador (migración 0030): licencias y datos del desarrollador, para todos los bares
         (texto: 'Programa', icono: Icons.code, permiso: 'programa', pagina: () => const ProgramaTab()),
+        // Solo el programador (migración 0046): seguridad de todos los bares
+        (texto: 'Plataforma', icono: Icons.admin_panel_settings_outlined, permiso: 'programa', pagina: () => const PlataformaTab()),
       ]);
 }
