@@ -33,6 +33,8 @@ class _PlataformaTabState extends State<PlataformaTab> {
     'pin_cambiado': 'Cambio de PIN',
     'precio_distinto': 'Venta sin internet con otro precio',
     'fondo_distinto': 'Fondo de caja distinto del que se dejó',
+    'factura_rechazada': 'Factura no aceptada por el servidor',
+    'factura_descuadre': 'Venta sin internet que no cuadra con su pedido',
   };
 
   @override

@@ -36,6 +36,8 @@ class _SeguridadPageState extends State<SeguridadPage> {
     'pin_cambiado': 'Cambió su PIN',
     'precio_distinto': 'Venta sin internet con un precio distinto del de la carta',
     'fondo_distinto': 'Abrió caja con un fondo distinto del que se dejó',
+    'factura_rechazada': 'El servidor no aceptó una factura (no cuadraba con la cadena o el pedido)',
+    'factura_descuadre': 'Venta sin internet con un importe distinto del de su pedido',
   };
 
   @override

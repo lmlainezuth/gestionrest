@@ -1,7 +1,6 @@
 import 'dart:convert';
 
 import '../../core/software.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../main.dart';
 import '../barra/venta_offline.dart';
@@ -12,9 +11,9 @@ import 'tbai_codigos.dart';
 import 'tbai_proveedor.dart';
 import 'tbai_xml.dart';
 
-/// Emite facturas TicketBAI: numera, encadena, firma, genera el
-/// identificador y el QR, guarda y envía. También anula, rectifica y
-/// convierte un ticket en factura con NIF.
+/// Emite facturas TicketBAI: numera, encadena y monta el fichero; el servidor lo comprueba, lo
+/// firma (o comprueba la firma del equipo) y lo guarda (migración 0050), y después se envía lo
+/// guardado. También anula, rectifica y convierte un ticket en factura con NIF.
 class FacturacionService {
   // Licencia y NIF del desarrollador: si la empresa no los tiene escritos, los del programa
   Future<Map<String, dynamic>> _config() async =>
@@ -87,7 +86,9 @@ class FacturacionService {
       final numero = ((r1[1] as num?)?.toInt() ?? 0) + 1;
       final fila = await prepararFactura(
         config: config,
-        firmar: proveedor.firmar,
+        // Simulado: firma de prueba. Gipuzkoa: firma el equipo si tiene el certificado; si no,
+        // el fichero va sin firmar y lo firma el servidor al guardarlo
+        firmar: proveedor is ProveedorSimulado ? proveedor.firmar : firmarEnEquipo,
         cajaId: caja['id'] as String,
         cadena: cadena,
         serie: serie,
@@ -102,12 +103,10 @@ class FacturacionService {
       );
 
       try {
-        final factura = await supabase
-            .from('facturas')
-            .insert({...fila, 'envio_intento': DateTime.now().toUtc().toIso8601String()}) // lo envía este equipo ahora
-            .select()
-            .single();
+        final factura = await registrar(fila);
         if (equipo != null) await CadenaEquipo.registrar(factura);
+        // Simulado: el servidor ya la deja como "simulada"
+        if (proveedor is ProveedorSimulado) return factura;
 
         if (enviarEnSegundoPlano) {
           // La factura ya está firmada y guardada (vale para imprimir); el envío va detrás.
@@ -115,36 +114,44 @@ class FacturacionService {
           _enviarDetras(proveedor, factura);
           return factura;
         }
-        final envio = await proveedor.enviar(factura['xml'] as String);
-        return await supabase
-            .from('facturas')
-            .update({'estado_envio': envio.estado, 'respuesta_envio': envio.respuesta})
-            .eq('id', factura['id'])
-            .select()
-            .single();
-      } on PostgrestException catch (e) {
-        if (e.code == '23505' && intento < 4) continue; // otro equipo emitió a la vez
+        await proveedor.enviar('facturas', factura['id'] as String);
+        return await _leer('facturas', factura);
+      } on CadenaOcupada {
+        if (intento < 4) continue; // otro equipo emitió a la vez
         rethrow;
       }
     }
     throw StateError('No se pudo numerar la factura');
   }
 
-  static void _enviarDetras(dynamic proveedor, Map<String, dynamic> factura) {
-    Future(() async {
-      final envio = await proveedor.enviar(factura['xml'] as String);
-      await supabase
-          .from('facturas')
-          .update({'estado_envio': envio.estado, 'respuesta_envio': envio.respuesta})
-          .eq('id', factura['id']);
-    }).catchError((_) {}).whenComplete(EnviosPendientes.revisar);
+  /// Guarda en el servidor una factura montada (y firmada o no) por [prepararFactura]. El servidor
+  /// comprueba fichero, cadena, numeración y pedido, la firma si hace falta y devuelve la fila.
+  /// Lanza [CadenaOcupada] si otro equipo de la misma cadena acaba de guardar una.
+  static Future<Map<String, dynamic>> registrar(Map<String, dynamic> fila) =>
+      llamarTicketbai({'accion': 'registrar', 'fila': fila, 'firmada': fila['firma'] != null});
+
+  /// Vuelve a leer la fila (el estado del envío lo apunta el servidor). Si no se puede, la de antes.
+  static Future<Map<String, dynamic>> _leer(String tabla, Map<String, dynamic> fila) async {
+    const nombres = {'facturas': 'facturas', 'anulaciones': 'tbai_anulaciones', 'subsanaciones': 'tbai_subsanaciones'};
+    try {
+      return await supabase.from(nombres[tabla]!).select().eq('id', fila['id'] as Object).single();
+    } catch (_) {
+      return fila;
+    }
   }
 
-  /// Construye, firma y deja lista para guardar la fila de una factura (con o sin internet).
+  static void _enviarDetras(TicketBaiProveedor proveedor, Map<String, dynamic> factura) {
+    Future(() => proveedor.enviar('facturas', factura['id'] as String))
+        .catchError((_) => const EnvioResultado('pendiente', ''))
+        .whenComplete(EnviosPendientes.revisar);
+  }
+
+  /// Construye y deja lista para guardar la fila de una factura (con o sin internet). Si [firmar]
+  /// devuelve null, el fichero va sin firmar (lo firma el servidor) y faltan firma, id TBAI y QR.
   /// [previa] es la última factura de la cadena ({id, serie, numero, fecha, firma}) o null.
   static Future<Map<String, dynamic>> prepararFactura({
     required Map<String, dynamic> config,
-    required Future<FirmaResultado> Function(String xml) firmar,
+    required Future<FirmaResultado?> Function(String xml) firmar,
     required String cajaId,
     required String cadena,
     required String serie,
@@ -195,18 +202,22 @@ class FacturacionService {
       referencias: referencias,
     );
     final firma = await firmar(xml);
-    final id = TbaiCodigos.identificador(
-      nif: config['nif'] as String,
-      fecha: fecha,
-      signatureValue: firma.signatureValue,
-    );
-    final qr = TbaiCodigos.urlQr(
-      identificador: id,
-      serie: serie,
-      numero: numero,
-      importeTotal: desglose.total,
-      base: TbaiCodigos.baseQr(config['entorno'] as String?),
-    );
+    final id = firma == null
+        ? null
+        : TbaiCodigos.identificador(
+            nif: config['nif'] as String,
+            fecha: fecha,
+            signatureValue: firma.signatureValue,
+          );
+    final qr = id == null
+        ? null
+        : TbaiCodigos.urlQr(
+            identificador: id,
+            serie: serie,
+            numero: numero,
+            importeTotal: desglose.total,
+            base: TbaiCodigos.baseQr(config['entorno'] as String?),
+          );
     return {
       'pedido_id': pedidoId,
       'caja_id': cajaId,
@@ -231,10 +242,10 @@ class FacturacionService {
       'anterior_numero': anterior?.numero,
       'anterior_fecha': anterior?.fecha.toUtc().toIso8601String(),
       'anterior_firma100': anterior?.firma100,
-      'firma': firma.signatureValue,
+      'firma': firma?.signatureValue,
       'tbai_id': id,
       'qr_url': qr,
-      'xml': firma.xmlFirmado,
+      'xml': firma?.xmlFirmado ?? xml,
       'creado_por': supabase.auth.currentUser?.id,
       'rectifica_id': original?['id'],
       'rectificativa_codigo': codigoRect,
@@ -308,21 +319,15 @@ class FacturacionService {
       versionSoftware: Software.version,
     );
     final firma = await proveedor.firmar(xml);
+    // El estado del envío lo pone el servidor (empieza "pendiente")
     final fila = await supabase.from('tbai_anulaciones').upsert({
       'factura_id': factura['id'],
       'motivo': motivo,
       'xml': firma.xmlFirmado,
       'firma': firma.signatureValue,
-      'estado_envio': 'pendiente',
-      'envio_intento': DateTime.now().toUtc().toIso8601String(),
     }, onConflict: 'factura_id').select().single();
-    final envio = await proveedor.enviar(firma.xmlFirmado, baja: true);
-    final r = await supabase
-        .from('tbai_anulaciones')
-        .update({'estado_envio': envio.estado, 'respuesta_envio': envio.respuesta})
-        .eq('id', fila['id'])
-        .select()
-        .single();
+    await proveedor.enviar('anulaciones', fila['id'] as String);
+    final r = await _leer('anulaciones', fila);
     // Si Hacienda la rechaza, la factura sigue valiendo y el cobro no se toca
     avisoCaja = null;
     if (r['estado_envio'] != 'error') await _devolverCobro(factura, 'ANUL ${factura['serie']}-${factura['numero']}');
@@ -379,56 +384,33 @@ class FacturacionService {
     );
     final fila = await supabase
         .from('tbai_subsanaciones')
-        .insert({'factura_id': factura['id'], 'accion': 'SUBSANAR', 'xml': xml, 'estado_envio': 'pendiente'})
+        .insert({'factura_id': factura['id'], 'accion': 'SUBSANAR', 'xml': xml})
         .select()
         .single();
-    final envio = await proveedor.enviarZuzendu(xml);
-    await supabase
-        .from('tbai_subsanaciones')
-        .update({'estado_envio': envio.estado, 'respuesta_envio': envio.respuesta})
-        .eq('id', fila['id'] as Object);
-    if (envio.estado == 'pendiente') {
-      final d = (jsonDecode(envio.respuesta) as Map)['descripcion'];
+    // El servidor apunta el resultado en la subsanación y en la factura (recibida y subsanada, o
+    // sigue rechazada con la respuesta nueva)
+    final envio = await proveedor.enviar('subsanaciones', fila['id'] as String);
+    if (envio.estado == 'pendiente' || envio.estado == 'ocupada') {
+      final d = envio.respuesta.isEmpty ? null : (jsonDecode(envio.respuesta) as Map)['descripcion'];
       throw StateError('no se pudo enviar la subsanación${d == null ? '' : ' ($d)'}. Vuelve a intentarlo');
     }
-    // La factura queda como recibida (subsanada) o sigue rechazada, con la respuesta nueva
-    final respuesta = envio.estado == 'enviada'
-        ? jsonEncode({...jsonDecode(envio.respuesta) as Map, 'subsanada': true})
-        : envio.respuesta;
-    return await supabase
-        .from('facturas')
-        .update({'estado_envio': envio.estado, 'respuesta_envio': respuesta})
-        .eq('id', factura['id'] as Object)
-        .select()
-        .single();
+    return _leer('facturas', factura);
   }
 
   /// Reenvía a Hacienda una factura o anulación que quedó pendiente. Si otro equipo la
   /// está enviando en este momento, no hace nada y devuelve la factura tal cual.
   Future<Map<String, dynamic>> reenviar(Map<String, dynamic> factura) async {
-    final mia = await supabase.rpc('tbai_reclamar_envio', params: {'p_tabla': 'facturas', 'p_id': factura['id']});
-    if (mia != true) return factura;
     final config = await supabase.from('tbai_config').select('entorno').limit(1).single();
-    final envio = await proveedorPara(config['entorno'] as String).enviar(factura['xml'] as String);
-    return await supabase
-        .from('facturas')
-        .update({'estado_envio': envio.estado, 'respuesta_envio': envio.respuesta})
-        .eq('id', factura['id'])
-        .select()
-        .single();
+    final envio = await proveedorPara(config['entorno'] as String).enviar('facturas', factura['id'] as String);
+    if (envio.estado == 'ocupada') return factura;
+    return _leer('facturas', factura);
   }
 
   Future<Map<String, dynamic>> reenviarAnulacion(Map<String, dynamic> anulacion) async {
-    final mia = await supabase.rpc('tbai_reclamar_envio', params: {'p_tabla': 'anulaciones', 'p_id': anulacion['id']});
-    if (mia != true) return anulacion;
     final config = await supabase.from('tbai_config').select('entorno').limit(1).single();
-    final envio = await proveedorPara(config['entorno'] as String).enviar(anulacion['xml'] as String, baja: true);
-    final r = await supabase
-        .from('tbai_anulaciones')
-        .update({'estado_envio': envio.estado, 'respuesta_envio': envio.respuesta})
-        .eq('id', anulacion['id'])
-        .select()
-        .single();
+    final envio = await proveedorPara(config['entorno'] as String).enviar('anulaciones', anulacion['id'] as String);
+    if (envio.estado == 'ocupada') return anulacion;
+    final r = await _leer('anulaciones', anulacion);
     // Por si al anular no hubo conexión y el cobro quedó sin descontar (si ya estaba, no repite)
     if (r['estado_envio'] != 'error') {
       final f = await supabase.from('facturas').select('id, serie, numero').eq('id', anulacion['factura_id'] as Object).single();

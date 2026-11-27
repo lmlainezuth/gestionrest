@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/certificado_equipo.dart';
 import '../../core/red.dart';
@@ -303,6 +302,9 @@ class VentaOffline {
     final factura = {
       ...fila,
       'id': _uuid(),
+      // Para el servidor: ya va firmada en el equipo; si el importe no cuadra con el pedido, la
+      // guarda igual y lo deja apuntado en Seguridad (migración 0050)
+      'sin_conexion': true,
       'estado_envio': 'pendiente',
       'respuesta_envio': jsonEncode({'descripcion': 'Emitida sin internet: se envía sola al volver la conexión'}),
     };
@@ -427,11 +429,16 @@ class VentaOffline {
           await supabase.from('mesas').update({'disponibilidad': 'libre'}).eq('id', v['mesa_id']);
         }
         try {
-          await supabase.from('facturas').upsert(factura, onConflict: 'id', ignoreDuplicates: true);
-        } on PostgrestException catch (e) {
+          // La guarda el servidor, que comprueba la firma del equipo, la cadena y el pedido. Si ya
+          // estaba guardada (se cortó a medias), la devuelve tal cual
+          await FacturacionService.registrar(factura);
+        } on CadenaOcupada {
           // Otra factura ya cuelga de la misma anterior: la serie del equipo la usa otro equipo
-          ultimoError = 'La venta ${factura['serie']}-${factura['numero']} no encaja en la cadena (${e.message}). '
+          ultimoError = 'La venta ${factura['serie']}-${factura['numero']} no encaja en la cadena. '
               'Revisa que ningún otro equipo use la serie ${factura['cadena']}';
+          rethrow;
+        } on StateError catch (e) {
+          ultimoError = 'El servidor no acepta la venta ${factura['serie']}-${factura['numero']}: ${e.message}';
           rethrow;
         }
         // Se quita de la cola por su id (mientras tanto pudo entrar otra venta)

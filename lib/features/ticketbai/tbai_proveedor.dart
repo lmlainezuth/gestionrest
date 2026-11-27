@@ -8,7 +8,6 @@ import 'package:http/http.dart' as http;
 
 import '../../core/certificado_equipo.dart';
 import '../../core/config.dart';
-import '../../core/envio_tbai.dart' if (dart.library.io) '../../core/envio_tbai_io.dart';
 import '../../core/firma_equipo.dart' if (dart.library.io) '../../core/firma_equipo_io.dart';
 import '../../main.dart';
 import 'firma_xades.dart';
@@ -21,16 +20,33 @@ class FirmaResultado {
 }
 
 class EnvioResultado {
-  final String estado; // enviada | error | pendiente | simulada
+  final String estado; // enviada | error | pendiente | simulada | ocupada (otro equipo la envía)
   final String respuesta; // JSON con estado, CSV, descripción y avisos de Hacienda
   const EnvioResultado(this.estado, this.respuesta);
 }
 
 /// Quien firma (XAdES con el certificado del negocio) y envía a la Hacienda Foral.
+/// Se envía siempre algo ya GUARDADO en la base: [tabla] (facturas, anulaciones o subsanaciones)
+/// e [id]. El servidor lee el fichero guardado y apunta él mismo el resultado (migración 0050).
 abstract class TicketBaiProveedor {
   Future<FirmaResultado> firmar(String xml);
-  Future<EnvioResultado> enviar(String xmlFirmado, {bool baja = false});
+  Future<EnvioResultado> enviar(String tabla, String id);
 }
+
+/// Llamada a la función "ticketbai" del servidor.
+Future<Map<String, dynamic>> llamarTicketbai(Map<String, dynamic> cuerpo) async {
+  try {
+    final r = await supabase.functions.invoke('ticketbai', body: cuerpo);
+    return Map<String, dynamic>.from(r.data as Map);
+  } on FunctionException catch (e) {
+    final d = e.details;
+    if (d is Map && d['code'] == '23505') throw CadenaOcupada();
+    throw StateError(d is Map && d['error'] != null ? '${d['error']}' : 'TicketBAI: error ${e.status}');
+  }
+}
+
+/// Otro equipo de la misma cadena acaba de guardar una factura: hay que numerar de nuevo.
+class CadenaOcupada implements Exception {}
 
 /// Modo simulado (tesis y pruebas sin certificado): firma de prueba con el mismo
 /// formato que una RSA-2048 (344 caracteres Base64) y no envía nada.
@@ -53,144 +69,50 @@ class ProveedorSimulado implements TicketBaiProveedor {
   }
 
   @override
-  Future<EnvioResultado> enviar(String xmlFirmado, {bool baja = false}) async =>
-      const EnvioResultado('simulada', 'Modo simulado: no se envía a la Hacienda Foral');
+  Future<EnvioResultado> enviar(String tabla, String id) async {
+    final r = await llamarTicketbai({'accion': 'simular_envio', 'tabla': tabla, 'id': id});
+    return EnvioResultado(r['estado'] as String, r['respuesta'] as String);
+  }
 }
 
-/// Gipuzkoa real: firma XAdES-EPES y envío con certificado en el servidor
-/// (Edge Function "ticketbai"); el certificado nunca está en los dispositivos.
+/// Gipuzkoa real: firma XAdES-EPES en el servidor (Edge Function "ticketbai") o en el equipo con
+/// el certificado instalado, y envío siempre por el servicio puente con lo guardado en la base.
 class ProveedorGipuzkoa implements TicketBaiProveedor {
   ProveedorGipuzkoa(this.entorno);
   final String entorno; // pruebas | produccion
-
-  static const _host = {
-    'pruebas': 'https://tbai-z.prep.gipuzkoa.eus/sarrerak/',
-    'produccion': 'https://tbai-z.egoitza.gipuzkoa.eus/sarrerak/',
-  };
-
-  /// Envío por el servicio puente (Netlify, Node): para Android, web o equipos sin certificado.
-  /// Hacienda pide una "renegociación" TLS que Flutter (BoringSSL) y Supabase no admiten.
-  Future<Map<String, dynamic>> _porPuente(String xmlFirmado, String servicio) async {
-    final token = supabase.auth.currentSession?.accessToken ?? '';
-    final r = await http
-        .post(
-          Uri.parse(Config.puenteTbai),
-          headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'},
-          body: jsonEncode({'xmlFirmado': xmlFirmado, 'entorno': entorno, 'baja': servicio == 'baja', 'servicio': servicio}),
-        )
-        .timeout(const Duration(seconds: 45));
-    final d = Map<String, dynamic>.from(jsonDecode(r.body) as Map);
-    if (d['error'] != null) throw StateError('Puente: ${d['error']}');
-    final texto = d['respuesta'] as String? ?? '';
-    final res = leerRespuesta(texto);
-    if (res['estado'] == null) res['descripcion'] = 'Respuesta HTTP ${d['http']}: ${texto.length > 300 ? texto.substring(0, 300) : texto}';
-    return res;
-  }
-
-  /// Envío desde este equipo con su certificado. En Android, si no logra conectar así,
-  /// se intenta por el puente (necesita los secretos de la empresa en el servidor).
-  Future<Map<String, dynamic>> _conCertificado(String xmlFirmado, String servicio, List<int> p12, String clave) async {
-    try {
-      final url = '${_host[entorno]!}$servicio';
-      final (codigo, texto) = await enviarConCertificado(url, xmlFirmado, p12, clave);
-      final r = leerRespuesta(texto);
-      if (r['estado'] == null) r['descripcion'] = 'Respuesta HTTP $codigo: ${texto.length > 300 ? texto.substring(0, 300) : texto}';
-      return r;
-    } catch (e) {
-      if (defaultTargetPlatform != TargetPlatform.android || Config.puenteTbai.isEmpty) rethrow;
-      try {
-        return await _porPuente(xmlFirmado, servicio);
-      } catch (e2) {
-        throw StateError('Desde este equipo: $e · $e2');
-      }
-    }
-  }
-
-  Future<Map<String, dynamic>> _llamar(Map<String, dynamic> cuerpo) async {
-    try {
-      final r = await supabase.functions.invoke('ticketbai', body: cuerpo);
-      return Map<String, dynamic>.from(r.data as Map);
-    } on FunctionException catch (e) {
-      final d = e.details;
-      throw StateError(d is Map && d['error'] != null ? '${d['error']}' : 'TicketBAI: error ${e.status}');
-    }
-  }
 
   @override
   Future<FirmaResultado> firmar(String xml) async {
     // Con certificado instalado en este equipo se firma aquí mismo (sirve sin internet)
     final local = await firmarEnEquipo(xml);
     if (local != null) return local;
-    final r = await _llamar({'accion': 'firmar', 'xml': xml});
+    final r = await llamarTicketbai({'accion': 'firmar', 'xml': xml});
     return FirmaResultado(r['xmlFirmado'] as String, r['signatureValue'] as String);
   }
 
-  static bool _yaRecibido(Map<String, dynamic> r) {
-    final textos = [r['descripcion'], for (final e in (r['errores'] as List? ?? [])) (e as Map)['descripcion']];
-    return textos.any((t) => t != null && RegExp(r'ya (ha sido |fue )?recibid|duplicad', caseSensitive: false).hasMatch('$t'));
-  }
-
-  /// Lee la respuesta XML de Hacienda (Salida/Estado, CSV, ResultadosValidacion).
-  static Map<String, dynamic> leerRespuesta(String xml) {
-    String? tag(String n) =>
-        RegExp('<(?:\\w+:)?$n>([\\s\\S]*?)</(?:\\w+:)?$n>').firstMatch(xml)?.group(1)?.trim();
-    final errores = [
-      for (final m in RegExp(r'<(?:\w+:)?ResultadosValidacion>([\s\S]*?)</(?:\w+:)?ResultadosValidacion>').allMatches(xml))
-        {
-          'codigo': RegExp(r'<(?:\w+:)?Codigo>([^<]*)<').firstMatch(m.group(1)!)?.group(1),
-          'descripcion': RegExp(r'<(?:\w+:)?Descripcion>([^<]*)<').firstMatch(m.group(1)!)?.group(1),
-        },
-    ];
-    return {
-      'estado': tag('Estado'),
-      'descripcion': tag('Descripcion'),
-      'csv': tag('CSV'),
-      'fechaRecepcion': tag('FechaRecepcion'),
-      'errores': errores,
-    };
-  }
-
+  /// Envío por el servicio puente (Netlify, Node): Hacienda pide una "renegociación" TLS que
+  /// Flutter (BoringSSL) y Supabase no admiten. El puente lee el fichero guardado y el servidor
+  /// apunta el resultado; aquí solo se recibe para enseñarlo.
   @override
-  Future<EnvioResultado> enviar(String xmlFirmado, {bool baja = false}) => _enviarA(baja ? 'baja' : 'alta', xmlFirmado);
-
-  /// Servicio Zuzendu-alta (OF 16/2022): subsanación de un fichero de alta rechazado. No va firmado.
-  Future<EnvioResultado> enviarZuzendu(String xml) => _enviarA('zuzendu-alta', xml);
-
-  /// [servicio]: alta, baja o zuzendu-alta (el final de la dirección del servicio de Hacienda).
-  Future<EnvioResultado> _enviarA(String servicio, String xmlFirmado) async {
+  Future<EnvioResultado> enviar(String tabla, String id) async {
+    if (Config.puenteTbai.isEmpty) {
+      return EnvioResultado('pendiente', jsonEncode({'descripcion': 'Falta configurar el servicio puente'}));
+    }
     try {
-      final Map<String, dynamic> r;
-      var cert = kIsWeb || !FirmaEquipo.soportada ? null : await CertificadoEquipo.leer();
-      // Solo se envía con el certificado del equipo lo de su titular; lo de otro bar va por el puente
-      if (cert != null) {
-        final nif = nifEmisor(xmlFirmado);
-        final titular = (await FirmaEquipo.certificado(cert.bytes, cert.clave)).titular;
-        if (nif == null || !certificadoDelNif(titular, nif)) cert = null;
-      }
-      if (cert != null) {
-        // Equipo con certificado instalado (Windows o Android): envía él mismo
-        r = await _conCertificado(xmlFirmado, servicio, cert.bytes, cert.clave);
-      } else if (Config.puenteTbai.isNotEmpty) {
-        r = await _porPuente(xmlFirmado, servicio);
-      } else {
-        throw StateError('Este equipo no puede enviar: instala el certificado (Windows) o configura el servicio puente');
-      }
-      final respuesta = jsonEncode({
-        'estado': r['estado'],
-        'descripcion': r['descripcion'],
-        'csv': r['csv'],
-        'fecha': r['fechaRecepcion'],
-        'avisos': r['errores'],
-      });
-      // Reenvío de algo que Hacienda ya tenía (se perdió la respuesta la primera vez): ya está recibido
-      if (r['estado'] == '01' && _yaRecibido(r)) return EnvioResultado('enviada', respuesta);
-      return switch (r['estado']) {
-        '00' => EnvioResultado('enviada', respuesta),
-        '01' => EnvioResultado('error', respuesta),
-        _ => EnvioResultado('pendiente', respuesta),
-      };
+      final token = supabase.auth.currentSession?.accessToken ?? '';
+      final r = await http
+          .post(
+            Uri.parse(Config.puenteTbai),
+            headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'},
+            body: jsonEncode({'tabla': tabla, 'id': id}),
+          )
+          .timeout(const Duration(seconds: 60));
+      final d = Map<String, dynamic>.from(jsonDecode(r.body) as Map);
+      if (d['ocupada'] == true) return const EnvioResultado('ocupada', '');
+      if (d['error'] != null) throw StateError('${d['error']}');
+      return EnvioResultado(d['estado'] as String, d['respuesta'] as String);
     } catch (e) {
-      // Sin conexión o Hacienda caída: queda pendiente y se reenvía después
+      // Sin conexión o Hacienda caída: sigue pendiente en la base y se reenvía después
       return EnvioResultado('pendiente', jsonEncode({'descripcion': 'No enviada todavía: $e'}));
     }
   }
