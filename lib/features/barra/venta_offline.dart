@@ -7,6 +7,7 @@ import '../../core/certificado_equipo.dart';
 import '../../core/red.dart';
 import '../../core/software.dart';
 import '../../main.dart';
+import '../caja/caja_service.dart';
 import '../ticketbai/cadena_equipo.dart';
 import '../ticketbai/caducidad_certificados.dart';
 import '../ticketbai/facturacion_service.dart';
@@ -52,12 +53,7 @@ class VentaOffline {
   /// Guarda caja, turno abierto y datos fiscales; y pone al día la cadena local con la base de datos.
   static Future<void> guardarContexto() async {
     final caja = await supabase.from('cajas').select('id, serie_factura').eq('activo', true).limit(1).single();
-    final turno = await supabase
-        .from('turnos_caja')
-        .select('id')
-        .eq('caja_id', caja['id'])
-        .eq('estado', 'abierto')
-        .maybeSingle();
+    final turno = await CajaService.turnoAbierto(caja['id'] as String);
     final config = await supabase.from('tbai_config').select().limit(1).single();
     final p = await SharedPreferences.getInstance();
     await p.setString(

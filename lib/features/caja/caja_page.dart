@@ -92,8 +92,9 @@ class _CajaPageState extends State<CajaPage> {
   double _sumaMov(String tipo) =>
       _movimientos.where((m) => m['tipo'] == tipo).fold(0.0, (s, m) => s + (m['importe'] as num).toDouble());
   double get _totalVentas => _ventas.values.fold(0.0, (s, v) => s + v);
-  double get _efectivoEsperado =>
-      (_turno!['efectivo_inicial'] as num).toDouble() + (_ventas['efectivo'] ?? 0) + _ingresos - _gastos;
+  // Sin el permiso de cierres, el fondo de un turno que abrió otro no llega (cuadre ciego)
+  double get _fondo => ((_turno!['efectivo_inicial'] as num?) ?? 0).toDouble();
+  double get _efectivoEsperado => _fondo + (_ventas['efectivo'] ?? 0) + _ingresos - _gastos;
 
   Future<void> _abrir() => _accion(() => abrirCajaRapida(context));
 
@@ -170,7 +171,7 @@ class _CajaPageState extends State<CajaPage> {
     }
     final datos = await contarCajaCiega(context,
         aviso: _mesasAbiertas > 0 ? 'Atención: hay $_mesasAbiertas cuentas sin cobrar ($_sinCobrarDetalle)' : null,
-        fondo: (_turno!['efectivo_inicial'] as num).toDouble());
+        fondo: _fondo);
     if (datos == null) return;
     // Datos del turno antes de cerrarlo (al recargar desaparecen)
     final turno = Map<String, dynamic>.from(_turno!);
@@ -266,7 +267,8 @@ class _CajaPageState extends State<CajaPage> {
         Row(
           children: [
             Expanded(
-              child: Text('${_caja!['nombre']} · abierta a las $hora · fondo ${euros(_turno!['efectivo_inicial'] as num)}',
+              child: Text('${_caja!['nombre']} · abierta a las $hora'
+                  '${_turno!['efectivo_inicial'] == null ? '' : ' · fondo ${euros(_turno!['efectivo_inicial'] as num)}'}',
                   style: const TextStyle(color: C.gris)),
             ),
             OutlinedButton.icon(
@@ -424,7 +426,7 @@ Future<void> imprimirCierreCaja({
       ..add(('!Total ventas', euros(total)))
       ..add(('-', ''))
       ..add(('EFECTIVO', null))
-      ..add(('Fondo inicial', euros(turno['efectivo_inicial'] as num)))
+      ..add(('Fondo inicial', euros((turno['efectivo_inicial'] as num?) ?? 0)))
       ..add(('+ Ventas en efectivo', euros(ventas['efectivo'] ?? 0)));
     final ing = (r['ingresos'] as num?)?.toDouble() ?? ingresos;
     final gas = (r['gastos'] as num?)?.toDouble() ?? gastos;

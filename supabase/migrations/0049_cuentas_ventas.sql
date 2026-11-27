@@ -60,6 +60,8 @@ declare
   v_k numeric;
 begin
   if p_lineas is null or jsonb_typeof(p_lineas) <> 'array' then raise exception 'Faltan los platos'; end if;
+  -- Las copias de las líneas conservan su precio (precio_de_linea no las recalcula)
+  perform set_config('gestionrest.servidor', '1', true);
   insert into public.pedidos (empresa_id, tipo, mesa_id, nombre_llevar, camarero_id, num_personas, reparto_de)
   values (v_ped.empresa_id, v_ped.tipo, v_ped.mesa_id, v_ped.nombre_llevar, auth.uid(), 1, p_pedido)
   returning id into v_nuevo;
@@ -166,8 +168,11 @@ declare
   v_extras numeric;
   v_precio numeric;
 begin
-  if current_user <> 'authenticated' then
-    return new;   -- funciones del servidor (repartir_cuenta copia la línea tal cual)
+  -- Es security definer (apunta en eventos_seguridad): current_user aquí es siempre el dueño, así
+  -- que el servidor se reconoce por el rol de la sesión (service_role, SQL Editor) o por la marca
+  -- que pone repartir_cuenta, que copia la línea tal cual. La app no puede poner esa marca.
+  if coalesce(auth.role(), '') <> 'authenticated' or current_setting('gestionrest.servidor', true) = '1' then
+    return new;
   end if;
   if new.reparto_de is not null then
     raise exception 'Para dividir una cuenta usa Dividir';
@@ -212,13 +217,26 @@ create policy "escribir_det_mod" on public.pedido_detalle_modificadores for all 
 -- =====================================================================
 -- 4 · Pedidos: total calculado y «pagado» solo con los cobros
 -- =====================================================================
+-- ¿Los cobros del pedido cubren su total? Solo sí o no: el camarero no lee los cobros (cuadre ciego)
+create or replace function public.pagos_cubren(p_pedido uuid, p_total numeric)
+returns boolean
+language sql stable
+security definer
+set search_path = ''
+as $$
+  select coalesce(sum(pg.importe), 0) >= p_total - 0.005
+    from public.pagos pg
+    join public.pedidos p on p.id = pg.pedido_id
+   where pg.pedido_id = p_pedido and p.empresa_id = (select public.empresa_actual())
+$$;
+revoke all on function public.pagos_cubren(uuid, numeric) from public, anon;
+grant execute on function public.pagos_cubren(uuid, numeric) to authenticated;
+
 create or replace function public.proteger_estado_pedido()
 returns trigger
 language plpgsql
 set search_path = ''
 as $$
-declare
-  v_cobrado numeric;
 begin
   if current_user <> 'authenticated' then
     return new;   -- recalcular_pedido y las funciones del servidor
@@ -244,11 +262,9 @@ begin
      and coalesce(public.mi_rol(), '') <> 'admin' then
     raise exception 'Para unir cuentas usa la opción Unir';
   end if;
-  if new.estado = 'pagado' and old.estado is distinct from 'pagado' then
-    select coalesce(sum(importe), 0) into v_cobrado from public.pagos where pedido_id = new.id;
-    if v_cobrado < new.total - 0.005 then
-      raise exception 'Faltan cobros: % € cobrados de % €', v_cobrado, new.total;
-    end if;
+  if new.estado = 'pagado' and old.estado is distinct from 'pagado'
+     and not public.pagos_cubren(new.id, new.total) then
+    raise exception 'Faltan cobros: lo cobrado no llega al total de la cuenta (% €)', new.total;
   end if;
   if old.estado in ('pagado', 'anulado', 'unido') and new.estado is distinct from old.estado
      and coalesce(public.mi_rol(), '') <> 'admin' then

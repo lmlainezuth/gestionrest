@@ -38,6 +38,8 @@ class _SeguridadPageState extends State<SeguridadPage> {
     'fondo_distinto': 'Abrió caja con un fondo distinto del que se dejó',
     'factura_rechazada': 'El servidor no aceptó una factura (no cuadraba con la cadena o el pedido)',
     'factura_descuadre': 'Venta sin internet con un importe distinto del de su pedido',
+    'pin_admin_denegado': 'Intentó cambiar el PIN de otro administrador',
+    'miembro_cambiado': 'Cambio de rol, permisos o baja de un empleado',
   };
 
   @override

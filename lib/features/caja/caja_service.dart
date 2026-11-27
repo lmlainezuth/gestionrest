@@ -5,10 +5,10 @@ class CajaService {
   static Future<Map<String, dynamic>> caja() =>
       supabase.from('cajas').select().eq('activo', true).limit(1).single();
 
-  static Future<Map<String, dynamic>?> turnoAbierto(String cajaId) => supabase
-      .from('turnos_caja')
-      .select()
-      .eq('caja_id', cajaId)
-      .eq('estado', 'abierto')
-      .maybeSingle();
+  /// Turno abierto de la caja, por el servidor (migración 0051): sin el permiso de cierres, el
+  /// camarero no lee la tabla de turnos y el fondo inicial solo le llega si abrió él la caja.
+  static Future<Map<String, dynamic>?> turnoAbierto(String cajaId) async {
+    final r = await supabase.rpc('turno_abierto', params: {'p_caja': cajaId});
+    return r == null ? null : Map<String, dynamic>.from(r as Map);
+  }
 }

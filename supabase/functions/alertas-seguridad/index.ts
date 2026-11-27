@@ -24,6 +24,8 @@ const NOMBRES: Record<string, string> = {
   fondo_distinto: "aperturas de caja con un fondo distinto del que se dejó",
   factura_rechazada: "facturas que el servidor no aceptó (no cuadraban)",
   factura_descuadre: "ventas sin internet que no cuadran con su pedido",
+  pin_admin_denegado: "intentos de cambiar el PIN de otro administrador",
+  miembro_cambiado: "cambios de rol, permisos o bajas de empleados",
 };
 
 Deno.serve(async (req) => {

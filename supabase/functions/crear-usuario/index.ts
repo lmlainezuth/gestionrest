@@ -86,7 +86,12 @@ Deno.serve(async (req) => {
       await apuntarEvento(String(empresa), "usuario_ajeno", user.id, "Intentó cambiar el PIN de un usuario de otro bar");
       return json({ error: "Ese usuario no es de tu empresa" }, 403);
     }
-    const { data: p } = await admin.from("perfiles").select("correo").eq("id", String(b.id)).single();
+    // El PIN de otro administrador no: con él se entraría como esa persona (solo cada uno el suyo)
+    if (miembro.rol === "admin" && String(b.id) !== user.id) {
+      await apuntarEvento(String(empresa), "pin_admin_denegado", user.id, "Intentó cambiar el PIN de otro administrador");
+      return json({ error: "El PIN de otro administrador solo lo puede cambiar él mismo" }, 403);
+    }
+    const { data: p } = await admin.from("perfiles").select("correo, nombre").eq("id", String(b.id)).single();
     if (!p?.correo) return json({ error: "Usuario no encontrado" }, 404);
     // Solo cuentas de PIN: la contraseña de una cuenta con correo la cambia su dueño
     if (!p.correo.endsWith("@gestionrest.local")) {
@@ -109,6 +114,8 @@ Deno.serve(async (req) => {
     // PIN de 6 cifras o más: la base le devuelve el rol (migraciones 0041 y 0048)
     const { error: errSeguro } = await admin.from("perfiles").update({ pin_seguro: true }).eq("id", String(b.id));
     if (errSeguro) return json({ error: errSeguro.message }, 400);
+    await apuntarEvento(String(empresa), "pin_cambiado", user.id,
+      String(b.id) === user.id ? "Cambió su propio PIN" : `Cambió el PIN de ${p.nombre ?? String(b.id)}`);
     return json({ ok: true });
   }
 
