@@ -7,7 +7,7 @@ Autor: **Levin Mauricio Lainez Aguirre** ([lmlainezuth](https://github.com/lmlai
 ## Qué hace
 
 - Mesas y comandas, barra (venta rápida) y pantalla de cocina
-- Carta, precios y carta pública con QR
+- Carta y precios
 - Caja: apertura, cobro (efectivo, tarjeta, Bizum), cierre y ticket de cierre
 - Informes, márgenes e IVA
 - Stock, pedidos a proveedores, reservas, fichajes y cuadrante

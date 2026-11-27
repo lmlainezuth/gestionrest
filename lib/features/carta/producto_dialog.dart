@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/foto_producto.dart';
 import '../../core/panel_lateral.dart';
 import '../../main.dart';
 import 'alergenos.dart';
@@ -78,7 +79,8 @@ class _ProductoDialogState extends State<ProductoDialog> {
       final ruta = '$empresa/${DateTime.now().microsecondsSinceEpoch}.$ext';
       await supabase.storage.from('productos').uploadBinary(ruta, bytes,
           fileOptions: FileOptions(contentType: 'image/${ext == 'jpg' ? 'jpeg' : ext}'));
-      setState(() => _imagen = supabase.storage.from('productos').getPublicUrl(ruta));
+      // Se guarda la ruta, no una dirección pública: el bucket es privado (migración 0047)
+      setState(() => _imagen = ruta);
     } catch (e) {
       setState(() => _error = 'No se pudo subir la imagen: $e');
     }
@@ -242,8 +244,8 @@ class _ProductoDialogState extends State<ProductoDialog> {
                       color: const Color(0xFFEFEAE0),
                       child: _imagen == null
                           ? const Icon(Icons.image_outlined, color: Colors.black38)
-                          : Image.network(_imagen!, fit: BoxFit.cover,
-                              errorBuilder: (_, _, _) => const Icon(Icons.broken_image_outlined)),
+                          : FotoProducto(_imagen, ancho: 72, alto: 72,
+                              hueco: const Icon(Icons.broken_image_outlined, color: Colors.black38)),
                     ),
                   ),
                   const SizedBox(width: 12),

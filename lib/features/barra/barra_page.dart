@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
+import '../../core/foto_producto.dart';
 import '../../core/pedir_cantidad.dart';
 import '../../core/conexion.dart';
 import '../../core/red.dart';
@@ -117,6 +118,7 @@ class _BarraPageState extends State<BarraPage> {
       ]);
       _grupos = List<Map<String, dynamic>>.from(r[0]);
       _productos = List<Map<String, dynamic>>.from(r[1]);
+      await precargarFotos(_productos);
       _areas = {for (final a in r[2]) a['id'] as String: a['nombre'] as String};
       _grupoId ??= _grupos.isEmpty ? null : _grupos.first['id'] as String;
       await _cargarCuentas();

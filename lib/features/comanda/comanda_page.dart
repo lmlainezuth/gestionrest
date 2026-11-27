@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/foto_producto.dart';
 import '../../core/pedir_cantidad.dart';
 import '../../core/red.dart';
 import '../../core/tema.dart';
@@ -104,6 +105,7 @@ class _ComandaPageState extends State<ComandaPage> {
               : await consulta.eq('id', idPedido).inFilter('estado', ['abierto', 'precuenta']).maybeSingle();
       _grupos = List<Map<String, dynamic>>.from(r[0]);
       _productos = List<Map<String, dynamic>>.from(r[1]);
+      await precargarFotos(_productos);
       _areas = {for (final a in r[2]) a['id'] as String: a['nombre'] as String};
       _grupoId ??= _grupos.isEmpty ? null : _grupos.first['id'] as String;
       _pedido = pedido;
@@ -808,9 +810,7 @@ class BotonProducto extends StatelessWidget {
                         if (producto['imagen_url'] != null) ...[
                           ClipRRect(
                             borderRadius: BorderRadius.circular(8),
-                            child: Image.network(producto['imagen_url'] as String,
-                                width: 40, height: 40, fit: BoxFit.cover,
-                                errorBuilder: (_, _, _) => const SizedBox(width: 40, height: 40)),
+                            child: FotoProducto(producto['imagen_url'] as String?, ancho: 40, alto: 40),
                           ),
                           const SizedBox(width: 8),
                         ],

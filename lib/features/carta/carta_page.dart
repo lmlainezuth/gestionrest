@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/foto_producto.dart';
 import '../../core/red.dart';
 import '../../core/aviso_sin_conexion.dart';
 import '../../core/panel_lateral.dart';
@@ -8,7 +9,6 @@ import '../../core/tema.dart';
 import '../../main.dart';
 import '../ticketbai/modelos.dart' show euros;
 import 'alergenos.dart';
-import 'carta_qr.dart';
 import 'colores.dart';
 import 'grupo_dialog.dart';
 import 'modificadores_dialog.dart';
@@ -68,6 +68,7 @@ class _CartaPageState extends State<CartaPage> {
         .eq('grupo_id', _grupoId!)
         .order('nombre');
     _productos = List<Map<String, dynamic>>.from(filas);
+    await precargarFotos(_productos);
   }
 
   Future<void> _elegirGrupo(String id) async {
@@ -188,12 +189,6 @@ class _CartaPageState extends State<CartaPage> {
                               style: tema.textTheme.titleLarge,
                             ),
                           ),
-                          OutlinedButton.icon(
-                            onPressed: () => mostrarQrCarta(context),
-                            icon: const Icon(Icons.qr_code_2),
-                            label: const Text('Carta QR'),
-                          ),
-                          const SizedBox(width: 8),
                           FilledButton.icon(
                             onPressed: () => _abrirProducto(),
                             icon: const Icon(Icons.add),
@@ -246,8 +241,7 @@ class _CartaPageState extends State<CartaPage> {
                     padding: const EdgeInsets.only(bottom: 6),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(8),
-                      child: Image.network(p['imagen_url'] as String, height: 44, width: 44, fit: BoxFit.cover,
-                          errorBuilder: (_, _, _) => const SizedBox.shrink()),
+                      child: FotoProducto(p['imagen_url'] as String?, ancho: 44, alto: 44),
                     ),
                   ),
                 Text(p['nombre'] as String,

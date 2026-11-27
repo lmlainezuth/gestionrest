@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'core/teclado_app.dart';
 import 'core/conexion.dart';
+import 'core/foto_producto.dart';
 import 'core/config.dart';
 import 'core/software.dart';
 import 'core/tema.dart';
@@ -31,6 +32,7 @@ Future<void> main() async {
     if (e.event == AuthChangeEvent.signedOut) {
       UltimaVenta.dato.value = null;
       CacheLectura.vaciar().ignore(); // lo que vio este usuario no se queda en el equipo
+      olvidarFotos();
     }
   });
   await Software.cargarCopia(); // datos del programa guardados en el equipo (sin internet)
