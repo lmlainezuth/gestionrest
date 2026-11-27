@@ -26,6 +26,8 @@ const NOMBRES: Record<string, string> = {
   factura_descuadre: "ventas sin internet que no cuadran con su pedido",
   pin_admin_denegado: "intentos de cambiar el PIN de otro administrador",
   miembro_cambiado: "cambios de rol, permisos o bajas de empleados",
+  venta_en_espera: "ventas sin internet que el servidor no aceptó (quedan en espera)",
+  factura_forzada: "ventas en espera enviadas tal cual por el administrador (factura forzada)",
 };
 
 Deno.serve(async (req) => {
@@ -97,6 +99,21 @@ Deno.serve(async (req) => {
   for (const [k, v] of resumen) {
     const [empresa, tipo] = k.split("|");
     lineas.push(`· ${bar(empresa)}: ${v.n} ${textoControl[tipo] ?? tipo} (${v.importe.toFixed(2)} €)`);
+  }
+
+  // Ventas sin internet en espera y aún sin resolver (sean del día que sean)
+  const { data: espera } = await db.from("ventas_espera").select("id, empresa_id, serie, numero, creado_en").limit(1000);
+  if (espera && espera.length > 0) {
+    const { data: hechas } = await db.from("facturas").select("id").in("id", espera.map((e) => e.id));
+    const resueltas = new Set((hechas ?? []).map((f) => f.id as string));
+    const porBar = new Map<string, string[]>();
+    for (const e of espera.filter((e) => !resueltas.has(e.id as string))) {
+      porBar.set(e.empresa_id, [...(porBar.get(e.empresa_id) ?? []), `${e.serie}-${e.numero}`]);
+    }
+    for (const [empresa, ventas] of porBar) {
+      lineas.push(`· ${bar(empresa)}: ${ventas.length} venta${ventas.length === 1 ? "" : "s"} sin internet en espera ` +
+        `(${ventas.slice(0, 5).join(", ")}${ventas.length > 5 ? "…" : ""}): Facturas › Ventas en espera`);
+    }
   }
 
   // Copias en Drive que fallaron

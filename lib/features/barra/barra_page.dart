@@ -290,7 +290,9 @@ class _BarraPageState extends State<BarraPage> {
 
   Future<void> _cobrar() async {
     if (_ronda.isEmpty && _cuenta == null) return;
-    if (_sinConexion || !Conexion.enLinea.value) return _cobrarSinConexion();
+    // Con una venta en espera (migración 0052) este equipo no emite con red: cobra sin internet y
+    // la venta sube detrás cuando el administrador resuelva la que espera
+    if (_sinConexion || !Conexion.enLinea.value || await VentaOffline.hayEnEspera()) return _cobrarSinConexion();
     setState(() => _ocupado = true);
     final eraNueva = _cuenta == null;
     try {

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 
 import '../../core/certificado_equipo.dart';
 import '../../core/red.dart';
@@ -338,6 +339,13 @@ class VentaOffline {
 
   // ---------- Sincronización ----------
 
+  /// ¿La primera venta de la cola está en espera en el servidor? Entonces este equipo no emite con
+  /// su serie hasta que se resuelva: cobra en modo sin internet (la venta va detrás en la cadena).
+  static Future<bool> hayEnEspera() async {
+    final c = await cola();
+    return c.isNotEmpty && c.first['en_espera'] == true;
+  }
+
   static Future<List<Map<String, dynamic>>> cola() async {
     final s = (await SharedPreferences.getInstance()).getString(_kCola);
     if (s == null) return [];
@@ -415,27 +423,56 @@ class VentaOffline {
         final v = lista.first;
         final pedido = Map<String, dynamic>.from(v['pedido'] as Map);
         final factura = Map<String, dynamic>.from(v['factura'] as Map);
-        await supabase.from('pedidos').upsert(pedido, onConflict: 'id', ignoreDuplicates: true);
-        await supabase.from('pedido_detalle').upsert(List<Map<String, dynamic>>.from(v['detalle'] as List),
-            onConflict: 'id', ignoreDuplicates: true);
-        await supabase.from('pagos').upsert(List<Map<String, dynamic>>.from(v['pagos'] as List),
-            onConflict: 'id', ignoreDuplicates: true);
-        await supabase.from('pedidos').update(Map<String, dynamic>.from(v['cierre'] as Map)).eq('id', pedido['id']);
-        if (v['mesa_id'] != null) {
-          await supabase.from('mesas').update({'disponibilidad': 'libre'}).eq('id', v['mesa_id']);
-        }
-        try {
-          // La guarda el servidor, que comprueba la firma del equipo, la cadena y el pedido. Si ya
-          // estaba guardada (se cortó a medias), la devuelve tal cual
-          await FacturacionService.registrar(factura);
-        } on CadenaOcupada {
-          // Otra factura ya cuelga de la misma anterior: la serie del equipo la usa otro equipo
-          ultimoError = 'La venta ${factura['serie']}-${factura['numero']} no encaja en la cadena. '
-              'Revisa que ningún otro equipo use la serie ${factura['cadena']}';
-          rethrow;
-        } on StateError catch (e) {
-          ultimoError = 'El servidor no acepta la venta ${factura['serie']}-${factura['numero']}: ${e.message}';
-          rethrow;
+        final nombre = '${factura['serie']}-${factura['numero']}';
+        if (v['en_espera'] == true) {
+          // En espera en el servidor: hasta que el administrador la envíe no sube nada más de este
+          // equipo (las siguientes van encadenadas detrás)
+          if (await supabase.rpc('venta_espera_resuelta', params: {'p_id': factura['id']}) != true) {
+            ultimoError = 'La venta $nombre está en espera: el administrador la envía desde Facturas › Ventas en espera. '
+                'Mientras, este equipo cobra en modo sin internet';
+            break;
+          }
+        } else {
+          try {
+            await supabase.from('pedidos').upsert(pedido, onConflict: 'id', ignoreDuplicates: true);
+            await supabase.from('pedido_detalle').upsert(List<Map<String, dynamic>>.from(v['detalle'] as List),
+                onConflict: 'id', ignoreDuplicates: true);
+            await supabase.from('pagos').upsert(List<Map<String, dynamic>>.from(v['pagos'] as List),
+                onConflict: 'id', ignoreDuplicates: true);
+            await supabase.from('pedidos').update(Map<String, dynamic>.from(v['cierre'] as Map)).eq('id', pedido['id']);
+            if (v['mesa_id'] != null) {
+              await supabase.from('mesas').update({'disponibilidad': 'libre'}).eq('id', v['mesa_id']);
+            }
+            // La guarda el servidor, que comprueba la firma del equipo, la cadena y el pedido. Si ya
+            // estaba guardada (se cortó a medias), la devuelve tal cual
+            await FacturacionService.registrar(factura);
+          } catch (e) {
+            if (esErrorDeRed(e)) rethrow;
+            // El servidor no la acepta: ya está emitida (el cliente tiene su ticket), así que queda
+            // en espera en el servidor para que el administrador la envíe. Sigue en la cola del
+            // equipo; solo se marca cuando el servidor confirma que la tiene.
+            final motivo = e is CadenaOcupada
+                ? 'No encaja en la cadena de la serie ${factura['cadena']} (¿otro equipo usa la misma serie?)'
+                : e is StateError
+                    ? e.message
+                    : e is PostgrestException
+                        ? e.message
+                        : '$e';
+            await FacturacionService.apartar(v, motivo);
+            await _exclusivo(() async {
+              final actual = await cola();
+              for (final x in actual) {
+                if ((x['factura'] as Map)['id'] == factura['id']) {
+                  x['en_espera'] = true;
+                  x['motivo_espera'] = motivo;
+                }
+              }
+              await p.setString(_kCola, jsonEncode(actual));
+            });
+            ultimoError = 'La venta $nombre no se pudo subir ($motivo) y queda en espera: el administrador la '
+                'envía desde Facturas › Ventas en espera. Mientras, este equipo cobra en modo sin internet';
+            break;
+          }
         }
         // Se quita de la cola por su id (mientras tanto pudo entrar otra venta)
         await _exclusivo(() async {
@@ -444,10 +481,12 @@ class VentaOffline {
           await p.setString(_kCola, jsonEncode(actual));
         });
         subidas++;
-        try {
-          await FacturacionService().reenviar(factura);
-        } catch (_) {
-          // Queda "pendiente" en la base de datos: lo reenvía el proceso automático
+        if (v['en_espera'] != true) {
+          try {
+            await FacturacionService().reenviar(factura);
+          } catch (_) {
+            // Queda "pendiente" en la base de datos: lo reenvía el proceso automático
+          }
         }
         lista = await cola();
       }

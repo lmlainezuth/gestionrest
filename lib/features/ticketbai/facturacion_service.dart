@@ -61,6 +61,10 @@ class FacturacionService {
     if (equipo != null) {
       // Antes, las ventas hechas sin internet: van primero en la cadena y en la numeración
       await VentaOffline.sincronizar();
+      if (await VentaOffline.hayEnEspera()) {
+        throw StateError('Este equipo tiene una venta sin internet en espera: cobra desde Barra (modo sin '
+            'internet) o pide al administrador que la envíe desde Facturas › Ventas en espera');
+      }
       if ((await VentaOffline.cola()).isNotEmpty) {
         throw StateError('Hay ventas hechas sin internet que aún no se han podido subir'
             '${VentaOffline.ultimoError == null ? '' : ': ${VentaOffline.ultimoError}'}');
@@ -129,6 +133,20 @@ class FacturacionService {
   /// Lanza [CadenaOcupada] si otro equipo de la misma cadena acaba de guardar una.
   static Future<Map<String, dynamic>> registrar(Map<String, dynamic> fila) =>
       llamarTicketbai({'accion': 'registrar', 'fila': fila, 'firmada': fila['firma'] != null});
+
+  /// Deja en espera en el servidor una venta sin internet que no se aceptó (migración 0052).
+  static Future<void> apartar(Map<String, dynamic> venta, String motivo) =>
+      llamarTicketbai({'accion': 'apartar', 'venta': venta, 'motivo': motivo});
+
+  /// Solo el administrador: guarda tal cual una venta en espera (con motivo) y la envía a Hacienda.
+  /// Devuelve la factura con el estado del envío.
+  Future<Map<String, dynamic>> forzar(String id, String motivo) async {
+    final factura = await llamarTicketbai({'accion': 'forzar', 'id': id, 'motivo': motivo});
+    final config = await supabase.from('tbai_config').select('entorno').limit(1).single();
+    final envio = await proveedorPara(config['entorno'] as String).enviar('facturas', factura['id'] as String);
+    if (envio.estado == 'ocupada') return factura;
+    return _leer('facturas', factura);
+  }
 
   /// Vuelve a leer la fila (el estado del envío lo apunta el servidor). Si no se puede, la de antes.
   static Future<Map<String, dynamic>> _leer(String tabla, Map<String, dynamic> fila) async {

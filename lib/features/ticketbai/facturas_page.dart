@@ -14,6 +14,7 @@ import '../auth/perfil.dart';
 import 'facturacion_service.dart';
 import 'modelos.dart';
 import 'ticket_view.dart';
+import 'ventas_espera_page.dart';
 
 /// Facturas emitidas: estado en Hacienda, reenvío, anulación, devolución y factura con NIF.
 class FacturasPage extends StatefulWidget {
@@ -608,6 +609,31 @@ class _FacturasPageState extends State<FacturasPage> {
                 const Padding(
                   padding: EdgeInsets.all(32),
                   child: Center(child: Text('No hay facturas en estas fechas.', style: TextStyle(color: C.gris))),
+                ),
+              // Ventas sin internet que el servidor no aceptó (migración 0052): solo el administrador
+              if (_admin)
+                FutureBuilder<List<Map<String, dynamic>>>(
+                  future: VentasEsperaPage.pendientes(),
+                  builder: (context, e) {
+                    final n = e.data?.length ?? 0;
+                    if (n == 0) return const SizedBox();
+                    return Card(
+                      color: const Color(0xFFFBE4E2),
+                      elevation: 0,
+                      child: ListTile(
+                        leading: const Icon(Icons.hourglass_top, color: Color(0xFFB3261E)),
+                        title: Text('$n ${n == 1 ? 'venta sin internet en espera' : 'ventas sin internet en espera'}'),
+                        subtitle: const Text('El servidor no las aceptó al subirlas: hay que enviarlas a Hacienda tal cual.'),
+                        trailing: FilledButton(
+                          onPressed: () async {
+                            await Navigator.push(context, MaterialPageRoute(builder: (_) => const VentasEsperaPage()));
+                            _recargar();
+                          },
+                          child: const Text('Resolver'),
+                        ),
+                      ),
+                    );
+                  },
                 ),
               if (_rechazadas > 0)
                 Card(

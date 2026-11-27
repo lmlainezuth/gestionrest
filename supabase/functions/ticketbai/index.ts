@@ -15,6 +15,10 @@
 //         { accion: 'preparar_envio', tabla, id }           → (puente) certificado y fichero guardado
 //         { accion: 'resultado_envio', tabla, id, … }       → (puente) apunta la respuesta de Hacienda
 //         { accion: 'simular_envio', tabla, id }            → modo simulado: la deja como "simulada"
+//         { accion: 'apartar', venta, motivo }              → deja en espera una venta sin internet
+//                                                             que no se aceptó (migración 0052)
+//         { accion: 'forzar', id, motivo }                  → (solo admin) guarda y deja lista para
+//                                                             enviar una venta en espera, tal cual
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.50.3';
 import forge from 'npm:node-forge@1.4.3';
 import * as xadesjs from 'npm:xadesjs@3.0.0';
@@ -210,10 +214,20 @@ type Contexto = {
   cert: () => Promise<Certificado>;
 };
 
-async function registrar(cx: Contexto, fila: Record<string, unknown>, firmada: boolean) {
+// [forzado]: venta sin internet en espera que el administrador manda tal cual (acción forzar). Ya
+// se emitió y el cliente tiene su ticket: no se comprueba la firma (la comprueba Hacienda) y, si no
+// encaja en la cadena, se guarda "fuera de cadena". Lo demás (NIF, fichero = fila, pedido) igual.
+async function registrar(cx: Contexto, fila: Record<string, unknown>, firmada: boolean,
+                         forzado: { motivo: string; avisos: string[] } | null = null) {
   const { srv, supa, config } = cx;
   const nif = config.nif;
   const simulado = config.entorno !== 'pruebas' && config.entorno !== 'produccion';
+  let rota = false;   // forzada fuera de cadena
+  const romper = (motivo: string, error: Error) => {
+    if (!forzado) throw error;
+    rota = true;
+    forzado.avisos.push(motivo);
+  };
 
   // Reintento de algo ya guardado (venta sin internet que se cortó al subir): se devuelve tal cual
   if (typeof fila.id === 'string') {
@@ -258,22 +272,27 @@ async function registrar(cx: Contexto, fila: Record<string, unknown>, firmada: b
   if (e1) throw new Error(e1.message);
   const previa = (ultimas as Record<string, unknown>[] | null)?.[0] ?? null;
   const enc = ruta(doc, 'HuellaTBAI', 'EncadenamientoFacturaAnterior');
-  if ((fila.anterior_id ?? null) !== (previa?.id ?? null)) throw Object.assign(new Error('La cadena ha cambiado'), { code: '23505' });
-  if (previa) {
+  if ((fila.anterior_id ?? null) !== (previa?.id ?? null)) {
+    romper('no encadena con la última factura de la serie', Object.assign(new Error('La cadena ha cambiado'), { code: '23505' }));
+  }
+  if (previa && !rota) {
     const firmaPrevia = String(previa.firma ?? '');
     if (texto(enc, 'SerieFacturaAnterior') !== previa.serie || num(texto(enc, 'NumFacturaAnterior')) !== Number(previa.numero)
         || texto(enc, 'FechaExpedicionFacturaAnterior') !== enMadrid(new Date(String(previa.fecha))).fecha
         || texto(enc, 'SignatureValueFirmaFacturaAnterior') !== firmaPrevia.slice(0, 100)) {
-      throw new Rechazo('El encadenamiento del fichero no es el de la factura anterior');
+      romper('el encadenamiento no es el de la factura anterior', new Rechazo('El encadenamiento del fichero no es el de la factura anterior'));
     }
-    if (fecha.getTime() < new Date(String(previa.fecha)).getTime() - 1000) throw new Rechazo('Fecha anterior a la de la factura previa');
-  } else if (enc) {
-    throw new Rechazo('Encadenamiento con una factura que no existe');
+    if (!forzado && fecha.getTime() < new Date(String(previa.fecha)).getTime() - 1000) throw new Rechazo('Fecha anterior a la de la factura previa');
+  } else if (!previa && enc) {
+    romper('encadena con una factura que no está guardada', new Rechazo('Encadenamiento con una factura que no existe'));
   }
-  if (fecha.getTime() > Date.now() + 5 * 60_000) throw new Rechazo('Fecha en el futuro');
+  if (!forzado && fecha.getTime() > Date.now() + 5 * 60_000) throw new Rechazo('Fecha en el futuro');
   const { data: ultimo, error: e2 } = await supa.rpc('tbai_ultimo_numero', { p_serie: serie });
   if (e2) throw new Error(e2.message);
-  if (numero !== (Number(ultimo ?? 0) + 1)) throw Object.assign(new Error('La numeración ha cambiado'), { code: '23505' });
+  if (numero !== (Number(ultimo ?? 0) + 1)) {
+    romper(`número ${numero} cuando tocaba el ${Number(ultimo ?? 0) + 1}`,
+      Object.assign(new Error('La numeración ha cambiado'), { code: '23505' }));
+  }
 
   // 3 · A qué corresponde: un pedido del bar sin factura, o la factura que rectifica o sustituye
   const sinConexion = fila.sin_conexion === true;
@@ -284,7 +303,7 @@ async function registrar(cx: Contexto, fila: Record<string, unknown>, firmada: b
     if (otra && otra.length > 0) throw new Rechazo('Este pedido ya tiene factura');
     if (!casi(Number(ped.total), total)) {
       // Venta sin internet ya firmada en el equipo: se guarda, pero queda apuntado
-      if (!sinConexion) throw new Rechazo(`El importe (${total}) no es el total del pedido (${ped.total})`);
+      if (!sinConexion && !forzado) throw new Rechazo(`El importe (${total}) no es el total del pedido (${ped.total})`);
       await apuntarEvento(srv, config.empresa_id, 'factura_descuadre', cx.usuario,
         `${serie}-${numero}: ${total} € en la venta sin internet; el pedido suma ${ped.total} €`);
     }
@@ -307,6 +326,10 @@ async function registrar(cx: Contexto, fila: Record<string, unknown>, firmada: b
   if (simulado) {
     firma = String(fila.firma ?? valorFirma(xml) ?? '');
     if (!firma) throw new Rechazo('Falta la firma de prueba');
+  } else if (forzado) {
+    // Tal como se emitió: la firma la comprueba Hacienda al recibirla
+    firma = valorFirma(xml) ?? '';
+    if (!firma) throw new Rechazo('El fichero no lleva firma');
   } else if (firmada) {
     firma = await comprobarFirmaEquipo(xml, nif);
   } else {
@@ -329,10 +352,13 @@ async function registrar(cx: Contexto, fila: Record<string, unknown>, firmada: b
   Object.assign(nueva, {
     empresa_id: config.empresa_id,
     nif_emisor: nif,
-    anterior_serie: previa?.serie ?? null,
-    anterior_numero: previa?.numero ?? null,
-    anterior_fecha: previa?.fecha ?? null,
-    anterior_firma100: previa ? String(previa.firma ?? '').slice(0, 100) : null,
+    // Fuera de cadena: sin anterior en la base, pero con la referencia que lleva el fichero
+    anterior_id: rota ? null : (previa?.id ?? null),
+    fuera_de_cadena: rota,
+    anterior_serie: rota ? texto(enc, 'SerieFacturaAnterior') : (previa?.serie ?? null),
+    anterior_numero: rota ? (num(texto(enc, 'NumFacturaAnterior')) || null) : (previa?.numero ?? null),
+    anterior_fecha: rota ? (fila.anterior_fecha ?? null) : (previa?.fecha ?? null),
+    anterior_firma100: rota ? texto(enc, 'SignatureValueFirmaFacturaAnterior') : (previa ? String(previa.firma ?? '').slice(0, 100) : null),
     firma,
     tbai_id: tbaiId,
     qr_url: qr,
@@ -414,6 +440,72 @@ Deno.serve(async (req) => {
             `${cuerpo.fila?.serie ?? '?'}-${cuerpo.fila?.numero ?? '?'}: ${e.message}`);
           return json({ error: e.message }, 400);
         }
+        throw e;
+      }
+    }
+
+    if (cuerpo.accion === 'apartar') {
+      // Venta sin internet que el servidor no aceptó: queda en espera con todo lo que trae el equipo
+      const venta = cuerpo.venta;
+      const factura = venta?.factura;
+      if (!factura || typeof factura.id !== 'string' || !/^[0-9a-f-]{36}$/i.test(factura.id)) return json({ error: 'Falta la venta' }, 400);
+      if (JSON.stringify(venta).length > 600_000) return json({ error: 'Venta demasiado grande' }, 400);
+      const mal = comprobarXml(factura.xml, nif, ['TicketBai']);
+      if (mal) return json({ error: mal }, 400);
+      const { data: ya } = await srv.from('facturas').select('id').eq('id', factura.id).eq('empresa_id', config.empresa_id).maybeSingle();
+      if (ya) return json({ ok: true, resuelta: true });
+      const { data: espera } = await srv.from('ventas_espera').select('id').eq('id', factura.id).maybeSingle();
+      if (!espera) {
+        const { error } = await srv.from('ventas_espera').insert({
+          id: factura.id, empresa_id: config.empresa_id, usuario_id: usuario.user.id,
+          serie: String(factura.serie ?? ''), numero: num(factura.numero) || 0, fecha: factura.fecha ?? null,
+          importe: num(factura.importe_total) || null, motivo_rechazo: String(cuerpo.motivo ?? '').slice(0, 1000),
+          venta, xml: factura.xml,
+        });
+        if (error && error.code !== '23505') return json({ error: error.message }, 400);
+        await apuntarEvento(srv, config.empresa_id, 'venta_en_espera', usuario.user.id,
+          `${factura.serie}-${factura.numero}: ${String(cuerpo.motivo ?? '')}`);
+      }
+      return json({ ok: true });
+    }
+
+    if (cuerpo.accion === 'forzar') {
+      // Solo el administrador, con motivo, y queda en Seguridad
+      if (rol !== 'admin') return json({ error: 'Solo el administrador puede enviar una venta en espera' }, 403);
+      const motivo = String(cuerpo.motivo ?? '').trim();
+      if (motivo.length < 10) return json({ error: 'Escribe el motivo (al menos 10 caracteres)' }, 400);
+      const { data: espera } = await srv.from('ventas_espera').select()
+        .eq('id', cuerpo.id).eq('empresa_id', config.empresa_id).maybeSingle();
+      if (!espera) return json({ error: 'Esa venta no está en espera en este bar' }, 404);
+      const { data: ya } = await srv.from('facturas').select().eq('id', espera.id).maybeSingle();
+      if (ya) return json(ya);
+      // Primero lo que la venta trae (puede que el equipo no llegara a subirlo): pedido, líneas,
+      // cobros y cierre, sin repetir lo que ya esté
+      const v = espera.venta;
+      const emp = { empresa_id: config.empresa_id };
+      const paso = async (q: PromiseLike<{ error: { message: string } | null }>, que: string) => {
+        const { error } = await q;
+        if (error) throw new Rechazo(`No se pudo guardar ${que}: ${error.message}`);
+      };
+      await paso(srv.from('pedidos').upsert({ ...v.pedido, ...emp }, { onConflict: 'id', ignoreDuplicates: true }), 'el pedido');
+      if (Array.isArray(v.detalle) && v.detalle.length) {
+        await paso(srv.from('pedido_detalle').upsert(v.detalle.map((d: Record<string, unknown>) => ({ ...d, ...emp, sin_conexion: true })),
+          { onConflict: 'id', ignoreDuplicates: true }), 'las líneas');
+      }
+      if (Array.isArray(v.pagos) && v.pagos.length) {
+        await paso(srv.from('pagos').upsert(v.pagos.map((p: Record<string, unknown>) => ({ ...p, ...emp })),
+          { onConflict: 'id', ignoreDuplicates: true }), 'los cobros');
+      }
+      if (v.cierre) await paso(srv.from('pedidos').update(v.cierre).eq('id', v.pedido.id).neq('estado', 'pagado'), 'el cierre');
+      if (v.mesa_id) await srv.from('mesas').update({ disponibilidad: 'libre' }).eq('id', v.mesa_id).eq('empresa_id', config.empresa_id);
+      const forzado = { motivo, avisos: [] as string[] };
+      try {
+        const factura = await registrar(cx, { ...v.factura, id: espera.id }, true, forzado);
+        await apuntarEvento(srv, config.empresa_id, 'factura_forzada', usuario.user.id,
+          `${espera.serie}-${espera.numero}${forzado.avisos.length ? ` (${forzado.avisos.join('; ')})` : ''}: ${motivo}`);
+        return json(factura);
+      } catch (e) {
+        if (e instanceof Rechazo) return json({ error: e.message }, 400);
         throw e;
       }
     }

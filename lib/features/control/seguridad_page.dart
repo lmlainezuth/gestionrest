@@ -40,6 +40,8 @@ class _SeguridadPageState extends State<SeguridadPage> {
     'factura_descuadre': 'Venta sin internet con un importe distinto del de su pedido',
     'pin_admin_denegado': 'Intentó cambiar el PIN de otro administrador',
     'miembro_cambiado': 'Cambio de rol, permisos o baja de un empleado',
+    'venta_en_espera': 'Venta sin internet que el servidor no aceptó: en espera (Facturas › Ventas en espera)',
+    'factura_forzada': 'Venta en espera enviada a Hacienda tal cual por el administrador',
   };
 
   @override

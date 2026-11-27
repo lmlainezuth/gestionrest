@@ -37,6 +37,8 @@ class _PlataformaTabState extends State<PlataformaTab> {
     'factura_descuadre': 'Venta sin internet que no cuadra con su pedido',
     'pin_admin_denegado': 'PIN de otro administrador (denegado)',
     'miembro_cambiado': 'Cambio de rol, permisos o baja',
+    'venta_en_espera': 'Venta sin internet en espera',
+    'factura_forzada': 'Factura forzada por el administrador',
   };
 
   @override
