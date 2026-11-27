@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../../core/crono_cobro.dart';
+import '../../core/servidor_despierto.dart';
+
 import '../../core/tema.dart';
 import '../../main.dart';
 import '../ajustes/clientes_tab.dart' show editarCliente;
@@ -127,6 +130,8 @@ class _CobroDialogState extends State<CobroDialog> {
   void initState() {
     super.initState();
     precalentarFirma(); // por si se cobra desde mesas sin haber pasado por Barra
+    // La función que guarda la factura, cargada mientras el camarero elige importe y forma de pago
+    ServidorDespierto.ya();
     _ponerImporte(_restante);
   }
 
@@ -234,9 +239,23 @@ class _CobroDialogState extends State<CobroDialog> {
       _cobrando = true;
       _error = null;
     });
+    CronoCobro.reanudar();
     try {
-      final caja = await CajaService.caja();
-      var turno = await CajaService.turnoAbierto(caja['id'] as String);
+      // Caja, turno, factura previa y datos fiscales a la vez: un viaje en vez de cuatro
+      final idCaja = CajaService.ultimaCajaId;
+      final r = await Future.wait<dynamic>([
+        CajaService.caja(),
+        idCaja == null ? Future<Map<String, dynamic>?>.value() : CajaService.turnoAbierto(idCaja),
+        supabase.from('facturas').select().eq('pedido_id', widget.pedido['id']).maybeSingle(),
+        FacturacionService.leerConfig(),
+      ]);
+      final caja = r[0] as Map<String, dynamic>;
+      var turno = r[1] as Map<String, dynamic>?;
+      final yaEmitida = r[2] as Map<String, dynamic>?;
+      final config = r[3] as Map<String, dynamic>;
+      // Primera vez en este equipo (o cambió la caja): el turno se pide ahora
+      if (idCaja != caja['id']) turno = await CajaService.turnoAbierto(caja['id'] as String);
+      CronoCobro.marca('Caja, turno, factura previa y datos fiscales');
       if (turno == null) {
         // Caja cerrada: se abre aquí mismo y se sigue cobrando
         if (!mounted || !await abrirCajaRapida(context)) throw 'Para cobrar hay que abrir la caja';
@@ -245,13 +264,15 @@ class _CobroDialogState extends State<CobroDialog> {
       }
 
       // Si un intento anterior ya emitió la factura, se reutiliza
-      final factura = await supabase.from('facturas').select().eq('pedido_id', widget.pedido['id']).maybeSingle() ??
+      final factura = yaEmitida ??
           await FacturacionService().emitir(
             lineas: _lineas,
             pedidoId: widget.pedido['id'] as String,
             cajaId: caja['id'] as String,
             cliente: _conNif ? _cliente : null,
             enviarEnSegundoPlano: true,
+            configLeida: config,
+            cajaLeida: caja,
           );
       // Pagos, pedido pagado y mesa libre en una sola transacción (migración 0036): si falla,
       // no queda nada a medias; si se reintenta y ya estaba cobrado, no repite los pagos
@@ -270,6 +291,7 @@ class _CobroDialogState extends State<CobroDialog> {
         if (_conNif) 'p_cliente': _cliente!['id'],
         if (widget.mesaId != null) 'p_mesa': widget.mesaId,
       });
+      CronoCobro.marca('Apuntar pagos y liberar la mesa');
       // Para el ticket: forma de pago y, en venta rápida, que es de barra
       final paraTicket = {
         ...factura,
@@ -282,6 +304,7 @@ class _CobroDialogState extends State<CobroDialog> {
       UltimaVenta.guardar(_total, List<Map<String, dynamic>>.from(paraTicket['pagos'] as List));
       if (mounted) Navigator.pop(context, paraTicket);
     } catch (e) {
+      CronoCobro.cancelar();
       setState(() {
         _cobrando = false;
         _error = '$e';

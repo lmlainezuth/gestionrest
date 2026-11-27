@@ -3,6 +3,7 @@ import 'dart:convert';
 import '../../core/software.dart';
 
 import '../../main.dart';
+import '../../core/crono_cobro.dart';
 import '../barra/venta_offline.dart';
 import 'cadena_equipo.dart';
 import 'envios_pendientes.dart';
@@ -16,7 +17,10 @@ import 'tbai_xml.dart';
 /// guardado. También anula, rectifica y convierte un ticket en factura con NIF.
 class FacturacionService {
   // Licencia y NIF del desarrollador: si la empresa no los tiene escritos, los del programa
-  Future<Map<String, dynamic>> _config() async =>
+  Future<Map<String, dynamic>> _config() => leerConfig();
+
+  /// Datos fiscales del bar con los del programa (licencia, desarrollador).
+  static Future<Map<String, dynamic>> leerConfig() async =>
       Software.completar(await supabase.from('tbai_config').select().limit(1).single());
 
   /// En producción no se emite nada con datos de prueba o sin licencia.
@@ -43,14 +47,19 @@ class FacturacionService {
     bool rectificativa = false, // por diferencias (devolución): líneas en negativo
     bool sustituyeSimplificada = false, // factura con NIF que sustituye a un ticket
     bool enviarEnSegundoPlano = false, // cobro: no esperar a Hacienda (se envía detrás)
+    Map<String, dynamic>? configLeida, // cobro: ya leídas a la vez que el turno (un viaje menos)
+    Map<String, dynamic>? cajaLeida,
   }) async {
     // En paralelo: cada consulta es un viaje al servidor
     final r0 = await Future.wait([
-      _config(),
-      cajaId == null
-          ? supabase.from('cajas').select('id, serie_factura').limit(1).single()
-          : supabase.from('cajas').select('id, serie_factura').eq('id', cajaId).single(),
+      configLeida != null ? Future.value(configLeida) : _config(),
+      cajaLeida != null
+          ? Future.value(cajaLeida)
+          : cajaId == null
+              ? supabase.from('cajas').select('id, serie_factura').limit(1).single()
+              : supabase.from('cajas').select('id, serie_factura').eq('id', cajaId).single(),
     ]);
+    CronoCobro.marca('Datos fiscales y serie');
     final config = r0[0];
     comprobarConfig(config);
     final caja = r0[1];
@@ -69,6 +78,7 @@ class FacturacionService {
         throw StateError('Hay ventas hechas sin internet que aún no se han podido subir'
             '${VentaOffline.ultimoError == null ? '' : ': ${VentaOffline.ultimoError}'}');
       }
+      CronoCobro.marca('Ventas sin internet del equipo');
     }
     final cadena = equipo ?? caja['serie_factura'] as String;
     final serie = '$cadena${rectificativa ? 'R' : cliente == null ? '' : 'F'}';
@@ -88,11 +98,18 @@ class FacturacionService {
       final ultimas = List<Map<String, dynamic>>.from(r1[0] as List);
       final previa = ultimas.isEmpty ? null : ultimas.first;
       final numero = ((r1[1] as num?)?.toInt() ?? 0) + 1;
+      CronoCobro.marca('Última factura y número');
+      final firmador = proveedor is ProveedorSimulado ? proveedor.firmar : firmarEnEquipo;
       final fila = await prepararFactura(
         config: config,
         // Simulado: firma de prueba. Gipuzkoa: firma el equipo si tiene el certificado; si no,
         // el fichero va sin firmar y lo firma el servidor al guardarlo
-        firmar: proveedor is ProveedorSimulado ? proveedor.firmar : firmarEnEquipo,
+        firmar: (xml) async {
+          CronoCobro.marca('Montar el fichero');
+          final f = await firmador(xml);
+          CronoCobro.marca(f == null ? 'Firma (la hace el servidor)' : 'Firmar en el equipo');
+          return f;
+        },
         cajaId: caja['id'] as String,
         cadena: cadena,
         serie: serie,
@@ -107,8 +124,11 @@ class FacturacionService {
       );
 
       try {
+        CronoCobro.marca('Terminar el fichero (código y QR)');
         final factura = await registrar(fila);
+        CronoCobro.marca('Guardar la factura en el servidor');
         if (equipo != null) await CadenaEquipo.registrar(factura);
+        if (equipo != null) CronoCobro.marca('Copia en el equipo');
         // Simulado: el servidor ya la deja como "simulada"
         if (proveedor is ProveedorSimulado) return factura;
 
@@ -131,8 +151,13 @@ class FacturacionService {
   /// Guarda en el servidor una factura montada (y firmada o no) por [prepararFactura]. El servidor
   /// comprueba fichero, cadena, numeración y pedido, la firma si hace falta y devuelve la fila.
   /// Lanza [CadenaOcupada] si otro equipo de la misma cadena acaba de guardar una.
-  static Future<Map<String, dynamic>> registrar(Map<String, dynamic> fila) =>
-      llamarTicketbai({'accion': 'registrar', 'fila': fila, 'firmada': fila['firma'] != null});
+  static Future<Map<String, dynamic>> registrar(Map<String, dynamic> fila) async {
+    final r = await llamarTicketbai({'accion': 'registrar', 'fila': fila, 'firmada': fila['firma'] != null});
+    // Cronómetro de la función (solo tiempos): para el aviso del cobro, no es parte de la factura
+    final t = r.remove('_tiempos');
+    if (t is List) CronoCobro.detalleServidor([for (final p in t) ('${(p as List)[0]}', (p[1] as num).toInt())]);
+    return r;
+  }
 
   /// Deja en espera en el servidor una venta sin internet que no se aceptó (migración 0052).
   static Future<void> apartar(Map<String, dynamic> venta, String motivo) =>

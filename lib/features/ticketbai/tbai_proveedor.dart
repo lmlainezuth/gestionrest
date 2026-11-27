@@ -36,7 +36,8 @@ abstract class TicketBaiProveedor {
 /// Llamada a la función "ticketbai" del servidor.
 Future<Map<String, dynamic>> llamarTicketbai(Map<String, dynamic> cuerpo) async {
   try {
-    final r = await supabase.functions.invoke('ticketbai', body: cuerpo);
+    // En la región de la base: las consultas de la función no cruzan Europa
+    final r = await supabase.functions.invoke('ticketbai', body: cuerpo, region: Config.regionServidor);
     return Map<String, dynamic>.from(r.data as Map);
   } on FunctionException catch (e) {
     final d = e.details;
@@ -148,7 +149,7 @@ Future<void> precalentarFirma() async {
 
 /// Comprueba el certificado configurado en el servidor.
 Future<Map<String, dynamic>> probarCertificado() async {
-  final r = await supabase.functions.invoke('ticketbai', body: {'accion': 'probar'});
+  final r = await supabase.functions.invoke('ticketbai', body: {'accion': 'probar'}, region: Config.regionServidor);
   return Map<String, dynamic>.from(r.data as Map);
 }
 

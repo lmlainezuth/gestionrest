@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+
+import '../../core/crono_cobro.dart';
+import '../../core/servidor_despierto.dart';
 import 'package:http/http.dart' as http;
 
 import '../../core/foto_producto.dart';
@@ -78,6 +81,8 @@ class _BarraPageState extends State<BarraPage> {
   @override
   void initState() {
     super.initState();
+    // Con la Barra abierta se cobra: la función de las facturas, cargada desde ya
+    if (Perfil.cache?.puede('cobrar') ?? false) ServidorDespierto.ya();
     // Otro bar: lo que quedó a medias era del anterior
     if (_empresaBarra != Perfil.cache?.empresaId) {
       _rondaBarra.clear();
@@ -295,11 +300,13 @@ class _BarraPageState extends State<BarraPage> {
     if (_sinConexion || !Conexion.enLinea.value || await VentaOffline.hayEnEspera()) return _cobrarSinConexion();
     setState(() => _ocupado = true);
     final eraNueva = _cuenta == null;
+    CronoCobro.empezar();
     try {
       final String id;
       try {
         // Venta rápida nueva: la comanda de cocina sale al cobrar, no antes (por si se cancela)
         id = await _guardarRonda(comanda: !eraNueva);
+        CronoCobro.marca('Guardar la cuenta');
       } catch (e) {
         // Se ha caído internet: venta rápida firmada en el equipo
         if (esErrorDeRed(e)) {
@@ -316,6 +323,7 @@ class _BarraPageState extends State<BarraPage> {
           .select('id, total, pedido_detalle(id, descripcion, cantidad, precio_unitario, tipo_iva, estado_cocina)')
           .eq('id', id)
           .single();
+      CronoCobro.marca('Leer la cuenta');
       if (!mounted) return;
       final factura = await showDialog<Map<String, dynamic>>(
         context: context,
@@ -323,6 +331,7 @@ class _BarraPageState extends State<BarraPage> {
         builder: (_) => CobroDialog(pedido: pedido, mesaId: null),
       );
       if (factura == null) {
+        CronoCobro.cancelar();
         if (eraNueva) {
           // Cobro cancelado: el pedido a medias se anula, pero lo marcado sigue en pantalla
           await supabase.from('pedidos').update({'estado': 'anulado'}).eq('id', id);
@@ -332,12 +341,17 @@ class _BarraPageState extends State<BarraPage> {
       } else {
         if (eraNueva) _comandaCocina('Barra');
         if (mounted) await ticketCobrado(context, factura);
+        CronoCobro.marca('Ticket y cajón (la impresión sigue detrás)');
         _ronda.clear();
         _cuenta = null;
       }
+      if (mounted) CronoCobro.terminar(context);
+      // La pantalla queda libre ya: las cuentas y la caja se refrescan detrás
+      if (mounted) setState(() => _ocupado = false);
       await _cargarCuentas();
       await _comprobarCaja(); // por si se abrió desde el cobro
     } catch (e) {
+      CronoCobro.cancelar();
       _avisar('No se pudo cobrar: $e');
     }
     if (mounted) setState(() => _ocupado = false);

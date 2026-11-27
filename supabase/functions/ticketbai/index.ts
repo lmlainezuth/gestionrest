@@ -9,7 +9,9 @@
 //   PUENTE_SECRETO       el mismo que en Netlify (preparar_envio y resultado_envio)
 // El certificado tiene que ser del NIF de la empresa: si no coincide, no se firma.
 //
-// Cuerpo: { accion: 'probar' }                              → datos del certificado (admin o camarero)
+// Cuerpo: { accion: 'despertar' }                           → solo «ok»: la app la llama al abrir el cobro
+//                                                             para que la función esté cargada al cobrar
+//         { accion: 'probar' }                              → datos del certificado (admin o camarero)
 //         { accion: 'registrar', fila, firmada }            → comprueba, firma si hace falta y GUARDA la
 //                                                             factura; devuelve la fila guardada
 //         { accion: 'firmar', xml }                         → firma una anulación (solo admin)
@@ -199,6 +201,8 @@ type Contexto = {
   srv: SupabaseClient; supa: SupabaseClient; usuario: string; rol: string;
   config: { empresa_id: string; entorno: string; nif: string };
   cert: () => Promise<Certificado>;
+  // Cronómetro de la función: cuánto tarda cada parte (se devuelve con la factura, solo tiempos)
+  marca: (paso: string) => void;
 };
 
 // [forzado]: venta sin internet en espera que el administrador manda tal cual (acción forzar). Ya
@@ -216,17 +220,38 @@ async function registrar(cx: Contexto, fila: Record<string, unknown>, firmada: b
     forzado.avisos.push(motivo);
   };
 
-  // Reintento de algo ya guardado (venta sin internet que se cortó al subir): se devuelve tal cual
-  if (typeof fila.id === 'string') {
-    const { data: ya } = await srv.from('facturas').select().eq('id', fila.id).eq('empresa_id', config.empresa_id).maybeSingle();
-    if (ya) return ya;
-  }
-
   const xml = String(fila.xml ?? '');
   const mal = comprobarXml(xml, nif, ['TicketBai']);
   if (mal) throw new Rechazo(mal);
   if (String(fila.nif_emisor ?? '').toUpperCase() !== nif) throw new Rechazo('El NIF del emisor no es el del bar');
   const doc = new DOMParser().parseFromString(xml, 'application/xml').documentElement;
+  // La firma del equipo empieza a comprobarse ya, a la vez que las consultas (es lo que más cálculo lleva).
+  // Antes, las comprobaciones del fichero: nada sin pasar por comprobarXml
+  const firmaEquipo = !simulado && !forzado && firmada
+    ? comprobarFirmaEquipo(xml, nif).then((v) => ({ v }), (e) => ({ e }))
+    : null;
+
+  // Consultas que no dependen unas de otras: todas a la vez desde el principio (antes iban una
+  // detrás de otra). Se usan más abajo, en el mismo orden de comprobación que antes; la firma del equipo
+  // se va comprobando mientras tanto.
+  const cadenaPedida = String(fila.cadena ?? '');
+  const [rYa, rUltimas, rUltimo, rPed, rOtra] = await Promise.all([
+    typeof fila.id === 'string'
+      ? srv.from('facturas').select().eq('id', fila.id).eq('empresa_id', config.empresa_id).maybeSingle()
+      : Promise.resolve({ data: null }),
+    supa.rpc('tbai_ultima_factura', { p_cadena: cadenaPedida }),
+    supa.rpc('tbai_ultimo_numero', { p_serie: String(fila.serie ?? '') }),
+    fila.pedido_id
+      ? srv.from('pedidos').select('id, empresa_id, total').eq('id', fila.pedido_id).maybeSingle()
+      : Promise.resolve({ data: null }),
+    fila.pedido_id
+      ? srv.from('facturas').select('id').eq('pedido_id', fila.pedido_id).limit(1)
+      : Promise.resolve({ data: null }),
+  ]);
+
+  cx.marca('Consultas a la base (a la vez)');
+  // Reintento de algo ya guardado (venta sin internet que se cortó al subir): se devuelve tal cual
+  if (rYa.data) return rYa.data;
 
   // 1 · El fichero dice lo mismo que la fila
   const cab = ruta(doc, 'Factura', 'CabeceraFactura');
@@ -253,9 +278,9 @@ async function registrar(cx: Contexto, fila: Record<string, unknown>, firmada: b
   if ((destinatario ?? null) !== (fila.cliente_nif ?? null)) throw new Rechazo('Destinatario distinto en el fichero');
 
   // 2 · Cadena y numeración: la de la base, no la que diga el equipo
-  const cadena = String(fila.cadena ?? '');
+  const cadena = cadenaPedida;
   if (!cadena || !serie.startsWith(cadena)) throw new Rechazo('Serie fuera de su cadena');
-  const { data: ultimas, error: e1 } = await supa.rpc('tbai_ultima_factura', { p_cadena: cadena });
+  const { data: ultimas, error: e1 } = rUltimas;
   if (e1) throw new Error(e1.message);
   const previa = (ultimas as Record<string, unknown>[] | null)?.[0] ?? null;
   const enc = ruta(doc, 'HuellaTBAI', 'EncadenamientoFacturaAnterior');
@@ -274,7 +299,7 @@ async function registrar(cx: Contexto, fila: Record<string, unknown>, firmada: b
     romper('encadena con una factura que no está guardada', new Rechazo('Encadenamiento con una factura que no existe'));
   }
   if (!forzado && fecha.getTime() > Date.now() + 5 * 60_000) throw new Rechazo('Fecha en el futuro');
-  const { data: ultimo, error: e2 } = await supa.rpc('tbai_ultimo_numero', { p_serie: serie });
+  const { data: ultimo, error: e2 } = rUltimo;
   if (e2) throw new Error(e2.message);
   if (numero !== (Number(ultimo ?? 0) + 1)) {
     romper(`número ${numero} cuando tocaba el ${Number(ultimo ?? 0) + 1}`,
@@ -284,9 +309,9 @@ async function registrar(cx: Contexto, fila: Record<string, unknown>, firmada: b
   // 3 · A qué corresponde: un pedido del bar sin factura, o la factura que rectifica o sustituye
   const sinConexion = fila.sin_conexion === true;
   if (fila.pedido_id) {
-    const { data: ped } = await srv.from('pedidos').select('id, empresa_id, total').eq('id', fila.pedido_id).maybeSingle();
+    const ped = rPed.data as { id: string; empresa_id: string; total: number } | null;
     if (!ped || ped.empresa_id !== config.empresa_id) throw new Rechazo('El pedido no es de este bar');
-    const { data: otra } = await srv.from('facturas').select('id').eq('pedido_id', fila.pedido_id).limit(1);
+    const otra = rOtra.data as { id: string }[] | null;
     if (otra && otra.length > 0) throw new Rechazo('Este pedido ya tiene factura');
     if (!casi(Number(ped.total), total)) {
       // Venta sin internet ya firmada en el equipo: se guarda, pero queda apuntado
@@ -317,8 +342,12 @@ async function registrar(cx: Contexto, fila: Record<string, unknown>, firmada: b
     // Tal como se emitió: la firma la comprueba Hacienda al recibirla
     firma = valorFirma(xml) ?? '';
     if (!firma) throw new Rechazo('El fichero no lleva firma');
-  } else if (firmada) {
-    firma = await comprobarFirmaEquipo(xml, nif);
+  } else if (firmaEquipo) {
+    cx.marca('Comprobar el fichero');
+    const r = await firmaEquipo;
+    if ('e' in r) throw r.e;
+    firma = r.v;
+    cx.marca('Comprobar la firma (lo que faltaba)');
   } else {
     // <ds:Signature>, no <SignatureValueFirmaFacturaAnterior> del encadenamiento
     if (/<(?:[\w.-]+:)?Signature[\s>]/.test(xml)) throw new Rechazo('El fichero ya viene firmado');
@@ -355,7 +384,9 @@ async function registrar(cx: Contexto, fila: Record<string, unknown>, firmada: b
     estado_envio: simulado ? 'simulada' : 'pendiente',
     respuesta_envio: simulado ? 'Modo simulado: no se envía a la Hacienda Foral' : null,
   });
+  cx.marca('Preparar la fila');
   const { data, error } = await srv.from('facturas').insert(nueva).select().single();
+  cx.marca('Guardar en la base');
   if (error) {
     if (error.code === '23505') throw Object.assign(new Error(error.message), { code: '23505' });
     throw new Rechazo(error.message);
@@ -382,21 +413,35 @@ async function apuntarEvento(srv: SupabaseClient, empresa: string, tipo: string,
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
+  // Cronómetro: [paso, milisegundos]. Solo tiempos, nunca datos
+  const tiempos: [string, number][] = [];
+  let tAnterior = performance.now();
+  const marca = (paso: string) => {
+    const t = performance.now();
+    tiempos.push([paso, Math.round(t - tAnterior)]);
+    tAnterior = t;
+  };
   try {
     // Solo usuarios con sesión y de una empresa con TicketBAI configurado
     const supa = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, {
       global: { headers: { Authorization: req.headers.get('Authorization') ?? '' } },
     });
     const srv = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
-    const { data: usuario } = await supa.auth.getUser();
+    // Sesión y cuerpo a la vez (cada viaje al servidor cuenta en el tiempo del cobro)
+    const [{ data: usuario }, cuerpo] = await Promise.all([supa.auth.getUser(), req.json().catch(() => ({}))]);
     if (!usuario.user) return json({ error: 'Sin sesión' }, 401);
-    // tbai_config solo devuelve la de la empresa actual del usuario (RLS por empresa)
-    const { data: config, error: errConfig } = await supa.from('tbai_config').select('empresa_id, entorno, nif').limit(1).single();
+    marca('Comprobar la sesión');
+    // Solo para que la función quede cargada mientras el camarero elige el importe: no hace nada más
+    if (cuerpo?.accion === 'despertar') return json({ ok: true });
+    // tbai_config solo devuelve la de la empresa actual del usuario (RLS por empresa). Firmar,
+    // guardar, enviar y comprobar el certificado: solo quien cobra (nunca cocina). Las dos a la vez.
+    const [{ data: config, error: errConfig }, { data: rol }] = await Promise.all([
+      supa.from('tbai_config').select('empresa_id, entorno, nif').limit(1).single(),
+      supa.rpc('mi_rol'),
+    ]);
     if (errConfig || !config) return json({ error: 'No se pudo leer la configuración TicketBAI' }, 400);
+    marca('Configuración y rol');
     const nif = String(config.nif ?? '').trim().toUpperCase();
-
-    // Firmar, guardar, enviar y comprobar el certificado: solo quien cobra (nunca cocina)
-    const { data: rol } = await supa.rpc('mi_rol');
     if (rol !== 'admin' && rol !== 'camarero') {
       return json({ error: 'Solo el administrador o un camarero pueden firmar y enviar facturas' }, 403);
     }
@@ -413,8 +458,7 @@ Deno.serve(async (req) => {
       const g = await delBar();
       return certificado ??= await leerCertificado(g.p12, g.clave);
     };
-    const cx: Contexto = { srv, supa, usuario: usuario.user.id, rol: String(rol), config: { ...config, nif }, cert };
-    const cuerpo = await req.json();
+    const cx: Contexto = { srv, supa, usuario: usuario.user.id, rol: String(rol), config: { ...config, nif }, cert, marca };
     const puente = () => secretoIgual(req.headers.get('x-puente-secreto'), Deno.env.get('PUENTE_SECRETO'));
 
     if (cuerpo.accion === 'probar') {
@@ -432,7 +476,8 @@ Deno.serve(async (req) => {
 
     if (cuerpo.accion === 'registrar') {
       try {
-        return json(await registrar(cx, cuerpo.fila ?? {}, cuerpo.firmada === true));
+        const guardada = await registrar(cx, cuerpo.fila ?? {}, cuerpo.firmada === true);
+        return json({ ...guardada, _tiempos: tiempos });
       } catch (e) {
         // deno-lint-ignore no-explicit-any
         if ((e as any).code === '23505') return json({ error: (e as Error).message, code: '23505' }, 409);

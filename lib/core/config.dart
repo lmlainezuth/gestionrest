@@ -10,4 +10,8 @@ class Config {
   /// Pon aquí la dirección de tu sitio de Netlify, por ejemplo:
   /// 'https://itsasoa-gestion.netlify.app/api/tbai'. Vacío = no se usa.
   static const puenteTbai = 'https://gestionrest.netlify.app/api/tbai';
+
+  /// Región de la base de datos (Project Settings › General › Region). La función ticketbai se
+  /// ejecuta allí, junto a la base: si no, cada consulta suya cruza Europa y el cobro se alarga.
+  static const regionServidor = 'eu-north-1';
 }

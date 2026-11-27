@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../core/crono_cobro.dart';
+
 import '../../core/tema.dart';
 import '../../main.dart';
 import '../caja/cobro_dialog.dart';
@@ -224,6 +226,8 @@ Future<bool> dividirCuenta(BuildContext context, Map<String, dynamic> pedido) as
   }
   if (context.mounted) {
     await ticketCobrado(context, factura);
+    CronoCobro.marca('Ticket y cajón (la impresión sigue detrás)');
+    if (context.mounted) CronoCobro.terminar(context);
   }
   // Si ya no queda nada por cobrar, la cuenta original se cierra
   final cerrada = await supabase.rpc('cerrar_cuenta_vacia', params: {'p_pedido': pedido['id']}) as bool? ?? false;

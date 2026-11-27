@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../core/crono_cobro.dart';
+
 import '../../core/foto_producto.dart';
 import '../../core/pedir_cantidad.dart';
 import '../../core/red.dart';
@@ -259,6 +261,8 @@ class _ComandaPageState extends State<ComandaPage> {
     if (factura == null || !mounted) return;
     factura['origen'] = _titulo;
     await ticketCobrado(context, factura);
+    CronoCobro.marca('Ticket y cajón (la impresión sigue detrás)');
+    if (mounted) CronoCobro.terminar(context);
     if (mounted) Navigator.pop(context, true);
   }
 
