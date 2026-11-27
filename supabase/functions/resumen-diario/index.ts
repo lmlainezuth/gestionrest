@@ -24,6 +24,16 @@ async function secretoIgual(dado: string | null, esperado: string | undefined): 
   return d === 0;
 }
 
+// Llamada del cron con la cabecera x-copia-secreto: "ok" si el secreto coincide, el motivo si no
+// (sin enseñar el secreto), null si no trae la cabecera. Sin espacios ni saltos de línea de más.
+async function secretoCron(req: Request, nombre: string): Promise<"ok" | string | null> {
+  const dado = req.headers.get("x-copia-secreto")?.trim();
+  if (!dado) return null;
+  const esperado = Deno.env.get(nombre)?.trim();
+  if (!esperado) return `No autorizado: falta ${nombre} en el servidor`;
+  return (await secretoIgual(dado, esperado)) ? "ok" : "No autorizado: el secreto no coincide";
+}
+
 const eur = (v: number) => v.toLocaleString("es-ES", { style: "currency", currency: "EUR" });
 const esc = (s: unknown) => String(s ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 const DIAS = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
@@ -118,7 +128,10 @@ Deno.serve(async (req) => {
   const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
   let empresas: { id: string; nombre: string; correo_resumen: string | null }[];
-  if (await secretoIgual(req.headers.get("x-copia-secreto"), Deno.env.get("RESUMEN_SECRETO"))) {
+  // Con la cabecera del cron, el secreto tiene que coincidir; sin ella, es el administrador desde la app
+  const cron = await secretoCron(req, "RESUMEN_SECRETO");
+  if (cron && cron !== "ok") return json({ error: cron }, 403);
+  if (cron === "ok") {
     const { data } = await db.from("empresa").select("id, nombre, correo_resumen").not("correo_resumen", "is", null);
     empresas = data ?? [];
   } else {

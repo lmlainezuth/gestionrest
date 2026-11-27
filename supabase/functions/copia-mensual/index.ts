@@ -31,6 +31,16 @@ async function secretoIgual(dado: string | null, esperado: string | undefined): 
   return d === 0;
 }
 
+// Llamada del cron con la cabecera x-copia-secreto: "ok" si el secreto coincide, el motivo si no
+// (sin enseñar el secreto), null si no trae la cabecera. Sin espacios ni saltos de línea de más.
+async function secretoCron(req: Request, nombre: string): Promise<"ok" | string | null> {
+  const dado = req.headers.get("x-copia-secreto")?.trim();
+  if (!dado) return null;
+  const esperado = Deno.env.get(nombre)?.trim();
+  if (!esperado) return `No autorizado: falta ${nombre} en el servidor`;
+  return (await secretoIgual(dado, esperado)) ? "ok" : "No autorizado: el secreto no coincide";
+}
+
 const json = (cuerpo: unknown, estado = 200) =>
   new Response(JSON.stringify(cuerpo), { status: estado, headers: { ...cors, "Content-Type": "application/json" } });
 
@@ -322,7 +332,10 @@ Deno.serve(async (req) => {
 
   // ¿Quién llama? pg_cron (secreto) → todas; administrador → la suya
   let empresas: { id: string; nombre: string }[];
-  const automatica = await secretoIgual(req.headers.get("x-copia-secreto"), Deno.env.get("COPIA_SECRETO"));
+  // Con la cabecera del cron, el secreto tiene que coincidir; sin ella, es el administrador desde la app
+  const cron = await secretoCron(req, "COPIA_SECRETO");
+  if (cron && cron !== "ok") return json({ error: cron }, 403);
+  const automatica = cron === "ok";
   if (automatica) {
     const { data } = await db.from("empresa").select("id, nombre");
     empresas = data ?? [];

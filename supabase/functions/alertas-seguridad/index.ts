@@ -18,8 +18,23 @@ async function secretoIgual(dado: string | null, esperado: string | undefined): 
   return d === 0;
 }
 
+// Llamada del cron con la cabecera x-copia-secreto: "ok" si el secreto coincide, el motivo si no
+// (sin enseñar el secreto), null si no trae la cabecera. Sin espacios ni saltos de línea de más.
+async function secretoCron(req: Request, nombre: string): Promise<"ok" | string | null> {
+  const dado = req.headers.get("x-copia-secreto")?.trim();
+  if (!dado) return null;
+  const esperado = Deno.env.get(nombre)?.trim();
+  if (!esperado) return `No autorizado: falta ${nombre} en el servidor`;
+  return (await secretoIgual(dado, esperado)) ? "ok" : "No autorizado: el secreto no coincide";
+}
+
+// CORS: el botón Test del panel de Supabase llama desde el navegador, que antes pregunta con OPTIONS
+const cors = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-copia-secreto",
+};
 const json = (cuerpo: unknown, estado = 200) =>
-  new Response(JSON.stringify(cuerpo), { status: estado, headers: { "Content-Type": "application/json" } });
+  new Response(JSON.stringify(cuerpo), { status: estado, headers: { ...cors, "Content-Type": "application/json" } });
 
 // Umbrales: a partir de aquí se avisa
 const PIN_FALLIDOS_POR_PERSONA = 10;
@@ -44,9 +59,9 @@ const NOMBRES: Record<string, string> = {
 };
 
 Deno.serve(async (req) => {
-  if (!(await secretoIgual(req.headers.get("x-copia-secreto"), Deno.env.get("ALERTAS_SECRETO")))) {
-    return json({ error: "No autorizado" }, 403);
-  }
+  if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
+  const cron = await secretoCron(req, "ALERTAS_SECRETO");
+  if (cron !== "ok") return json({ error: cron ?? "No autorizado: no llega la cabecera x-copia-secreto" }, 403);
   const siempre = (await req.json().catch(() => ({})))?.siempre === true;
 
   const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
