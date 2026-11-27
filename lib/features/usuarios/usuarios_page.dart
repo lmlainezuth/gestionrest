@@ -112,7 +112,10 @@ class _UsuariosPageState extends State<UsuariosPage> {
 
   Future<void> _permisos(Map<String, dynamic> p) async {
     final rol = Rol.values.byName(p['rol'] as String);
-    final posibles = permisosPermitidos[rol]!;
+    final posibles = [
+      for (final k in permisosPermitidos[rol]!)
+        if (k != 'cocina' || (Perfil.cache?.usaCocina ?? true)) k,
+    ];
     final marcados = {...((p['permisos'] as List?)?.cast<String>() ?? permisosPorDefecto[rol]!)};
     final ok = await showDialog<bool>(
       context: context,

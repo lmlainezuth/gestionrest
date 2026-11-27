@@ -45,8 +45,13 @@ class AdminHome extends StatefulWidget {
 class _AdminHomeState extends State<AdminHome> {
   // Al abrir, la Barra (venta rápida) si este usuario la tiene
   // En el TPV abre en la Barra; en el móvil (web) el dueño abre en "Hoy"
-  late int _seccion = _visibles.indexWhere((s) => s.titulo == (kIsWeb && widget.perfil.puede('panel') ? 'Hoy' : 'Barra'))
-      .clamp(0, _visibles.length);
+  late String _titulo = kIsWeb && widget.perfil.puede('panel') ? 'Hoy' : 'Barra';
+
+  /// Sección abierta. Si deja de verse (por ejemplo Cocina al apagarla), la primera.
+  int get _seccion {
+    final i = _visibles.indexWhere((s) => s.titulo == _titulo);
+    return i < 0 ? 0 : i;
+  }
 
   /// Secciones, en orden de uso. Se ve si el usuario tiene alguno de sus permisos.
   static const _secciones = [
@@ -62,10 +67,11 @@ class _AdminHomeState extends State<AdminHome> {
     (icono: Icons.settings_outlined, titulo: 'Ajustes', permisos: ['ajustes', 'usuarios']),
   ];
 
-  late final _visibles = [
-    for (final s in _secciones)
-      if (s.permisos.any(widget.perfil.puede) && (s.titulo != 'Cocina' || widget.perfil.usaCocina)) s,
-  ];
+  // Con el perfil de ahora: tras guardar Ajustes › Empresa la app recarga el perfil sin rehacer esta pantalla
+  List<({IconData icono, List<String> permisos, String titulo})> get _visibles => [
+        for (final s in _secciones)
+          if (s.permisos.any(widget.perfil.puede)) s,
+      ];
 
   /// Botones de la cabecera: misma altura y forma que la pastilla del usuario.
   static final _estiloCabecera = OutlinedButton.styleFrom(
@@ -234,7 +240,7 @@ class _AdminHomeState extends State<AdminHome> {
                             texto: _visibles[i].titulo,
                             activo: i == _seccion,
                             onTap: () {
-                              setState(() => _seccion = i);
+                              setState(() => _titulo = _visibles[i].titulo);
                               if (estrecho) Navigator.of(context).pop();
                             },
                           ),

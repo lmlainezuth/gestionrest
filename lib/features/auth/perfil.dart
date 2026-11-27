@@ -37,8 +37,10 @@ class Perfil {
   bool get esAdmin => rol == Rol.admin;
 
   /// ¿Puede usar esta función? Lo marcado para él dentro de lo que su rol permite;
-  /// sin marcar nada, lo que su rol tiene por defecto.
+  /// sin marcar nada, lo que su rol tiene por defecto. En un bar sin pantalla de cocina (Ajustes ›
+  /// Empresa) el permiso «cocina» no vale para nadie.
   bool puede(String permiso) =>
+      (permiso != 'cocina' || usaCocina) &&
       permisosPermitidos[rol]!.contains(permiso) &&
       (permisos == null ? permisosPorDefecto[rol]!.contains(permiso) : permisos!.contains(permiso));
 
